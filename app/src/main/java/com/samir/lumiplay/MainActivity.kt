@@ -1093,3 +1093,133 @@ fun LumiStreamPlayerDialog(
         }
     }
 }
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun LumiStreamPlayerDialog(
+    session: StreamSession,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val lowerUrl = session.url.lowercase()
+    val isDirectMedia = lowerUrl.endsWith(".mp4") || lowerUrl.endsWith(".m3u8") || lowerUrl.endsWith(".mkv") || lowerUrl.endsWith(".webm")
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    val blockedKeywords = remember {
+        listOf(
+            "casino", "bet", "poker", "slot", "adsterra", "propeller",
+            "exoclick", "juicyads", "popads", "hilltopads", "clickadu",
+            "doubleclick", "googlesyndication", "redirect"
+        )
+    }
+
+    val exoPlayer = remember(session.url, isDirectMedia) {
+        if (isDirectMedia) {
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(session.url))
+                prepare()
+                playWhenReady = true
+            }
+        } else {
+            null
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        onDispose {
+            exoPlayer?.release()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF05070E))
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0E1426))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = session.title,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp)
+                )
+
+                TextButton(
+                    onClick = {
+                        if (webViewRef?.canGoBack() == true) {
+                            webViewRef?.goBack()
+                        }
+                    }
+                ) {
+                    Text("Back", color = Color(0xFF67E8F9), fontSize = 12.sp)
+                }
+
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close Stream",
+                        tint = Color.White
+                    )
+                }
+            }
+
+            if (isDirectMedia && exoPlayer != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = exoPlayer
+                            useController = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            webViewRef = this
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.setSupportMultipleWindows(false)
+                            settings.javaScriptCanOpenWindowsAutomatically = false
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            webChromeClient = WebChromeClient()
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    val target = request?.url?.toString()?.lowercase().orEmpty()
+                                    val isAd = blockedKeywords.any { key -> target.contains(key) }
+                                    if (isAd) {
+                                        Toast.makeText(ctx, "Ad redirect blocked", Toast.LENGTH_SHORT).show()
+                                        return true
+                                    }
+                                    return false
+                                }
+                            }
+                            loadUrl(session.url)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
