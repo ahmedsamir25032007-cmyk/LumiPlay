@@ -991,7 +991,6 @@ fun LinkActionCard(
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
