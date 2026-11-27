@@ -1223,3 +1223,182 @@ fun LumiStreamPlayerDialog(
         }
     }
 }
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun LumiStreamPlayerDialog(
+    session: StreamSession,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    fun looksLikeVideoUrl(raw: String?): Boolean {
+        val u = raw?.lowercase().orEmpty()
+        return u.endsWith(".mp4") ||
+            u.endsWith(".m3u8") ||
+            u.endsWith(".mkv") ||
+            u.endsWith(".webm") ||
+            u.contains(".mp4?") ||
+            u.contains(".m3u8?") ||
+            u.contains("/video") ||
+            u.contains("stream")
+    }
+
+    var currentStreamUrl by remember(session.url) { mutableStateOf(session.url) }
+    var useExoPlayer by remember(session.url) { mutableStateOf(looksLikeVideoUrl(session.url)) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    val blockedKeywords = remember {
+        listOf(
+            "casino", "bet", "poker", "slot", "adsterra", "propeller",
+            "exoclick", "juicyads", "popads", "hilltopads", "clickadu",
+            "doubleclick", "googlesyndication", "redirect"
+        )
+    }
+
+    val exoPlayer = remember(currentStreamUrl, useExoPlayer) {
+        if (useExoPlayer) {
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(currentStreamUrl))
+                prepare()
+                playWhenReady = true
+            }
+        } else {
+            null
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        onDispose {
+            exoPlayer?.release()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF05070E))
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0E1426))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        text = session.title,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (useExoPlayer) "Direct Video Player" else "Smart Stream View",
+                        color = Color(0xFF67E8F9),
+                        fontSize = 11.sp
+                    )
+                }
+
+                if (useExoPlayer) {
+                    TextButton(
+                        onClick = { useExoPlayer = false }
+                    ) {
+                        Text("Page", color = Color(0xFF93C5FD), fontSize = 12.sp)
+                    }
+                } else {
+                    TextButton(
+                        onClick = {
+                            if (webViewRef?.canGoBack() == true) {
+                                webViewRef?.goBack()
+                            }
+                        }
+                    ) {
+                        Text("Back", color = Color(0xFF67E8F9), fontSize = 12.sp)
+                    }
+                }
+
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close Stream",
+                        tint = Color.White
+                    )
+                }
+            }
+
+            if (useExoPlayer && exoPlayer != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AndroidView(
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
+                                player = exoPlayer
+                                useController = true
+                                controllerShowTimeoutMs = 3500
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            webViewRef = this
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.setSupportMultipleWindows(false)
+                            settings.javaScriptCanOpenWindowsAutomatically = false
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            webChromeClient = WebChromeClient()
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    val rawUrl = request?.url?.toString().orEmpty()
+                                    val lower = rawUrl.lowercase()
+                                    if (blockedKeywords.any { key -> lower.contains(key) }) {
+                                        Toast.makeText(ctx, "Ad redirect blocked", Toast.LENGTH_SHORT).show()
+                                        return true
+                                    }
+                                    if (looksLikeVideoUrl(rawUrl)) {
+                                        currentStreamUrl = rawUrl
+                                        useExoPlayer = true
+                                        return true
+                                    }
+                                    return false
+                                }
+
+                                override fun onLoadResource(view: WebView?, url: String?) {
+                                    super.onLoadResource(view, url)
+                                    if (!useExoPlayer && looksLikeVideoUrl(url) && url != null) {
+                                        currentStreamUrl = url
+                                        useExoPlayer = true
+                                    }
+                                }
+                            }
+                            loadUrl(session.url)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
