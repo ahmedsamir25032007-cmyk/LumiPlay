@@ -1,11 +1,26 @@
 package com.samir.lumiplay
 
+import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,8 +36,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Hd
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -40,10 +61,15 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,6 +112,11 @@ data class MovieDetailsResponse(
     val links: List<LinkEntry> = emptyList()
 )
 
+data class StreamSession(
+    val title: String,
+    val url: String
+)
+
 interface LumiApiService {
     @GET("movies")
     suspend fun getLatestMovies(@Query("page") page: Int = 1): MoviesResponse
@@ -109,6 +140,7 @@ object LumiNetwork {
             .create(LumiApiService::class.java)
     }
 }
+
 data class LumiUiState(
     val showWelcome: Boolean = true,
     val movies: List<MovieItem> = emptyList(),
@@ -119,7 +151,8 @@ data class LumiUiState(
     val selectedMovie: MovieItem? = null,
     val details: MovieDetailsResponse? = null,
     val isDetailsLoading: Boolean = false,
-    val detailsError: String? = null
+    val detailsError: String? = null,
+    val activeStream: StreamSession? = null
 )
 
 class LumiViewModel : ViewModel() {
@@ -218,7 +251,7 @@ class LumiViewModel : ViewModel() {
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isDetailsLoading = false,
-                    detailsError = "Could not load details. You can open the page link."
+                    detailsError = "Could not load details. You can still open the page link."
                 )
             }
         }
@@ -232,7 +265,18 @@ class LumiViewModel : ViewModel() {
             detailsError = null
         )
     }
+
+    fun startStream(title: String, url: String) {
+        _uiState.value = _uiState.value.copy(
+            activeStream = StreamSession(title = title, url = url)
+        )
+    }
+
+    fun closeStream() {
+        _uiState.value = _uiState.value.copy(activeStream = null)
+    }
 }
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -253,14 +297,14 @@ fun LiquidBackground(content: @Composable BoxScope.() -> Unit) {
                 Brush.radialGradient(
                     colors = listOf(Color(0x664F46E5), Color.Transparent),
                     center = Offset(180f, 260f),
-                    radius = 750f
+                    radius = 780f
                 )
             )
             .background(
                 Brush.radialGradient(
                     colors = listOf(Color(0x5506B6D4), Color.Transparent),
                     center = Offset(920f, 1550f),
-                    radius = 850f
+                    radius = 880f
                 )
             ),
         content = content
@@ -271,14 +315,25 @@ fun LiquidBackground(content: @Composable BoxScope.() -> Unit) {
 fun LumiPlayRoot(lumiViewModel: LumiViewModel = viewModel()) {
     val state by lumiViewModel.uiState.collectAsState()
 
-    if (state.showWelcome) {
-        LumiPlayWelcomeScreen(
-            onContinue = { lumiViewModel.enterAppNow() }
-        )
-    } else {
-        LumiPlayHomeScreen(
-            state = state,
-            lumiViewModel = lumiViewModel
+    AnimatedContent(
+        targetState = state.showWelcome,
+        transitionSpec = {
+            fadeIn(animationSpec = tween(420)) togetherWith fadeOut(animationSpec = tween(320))
+        },
+        label = "ScreenTransition"
+    ) { isWelcome ->
+        if (isWelcome) {
+            LumiPlayWelcomeScreen(onContinue = { lumiViewModel.enterAppNow() })
+        } else {
+            LumiPlayHomeScreen(state = state, lumiViewModel = lumiViewModel)
+        }
+    }
+
+    val streamSession = state.activeStream
+    if (streamSession != null) {
+        LumiStreamPlayerDialog(
+            session = streamSession,
+            onDismiss = { lumiViewModel.closeStream() }
         )
     }
 }
@@ -304,7 +359,7 @@ fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
                     .background(
                         Brush.linearGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.14f),
+                                Color.White.copy(alpha = 0.15f),
                                 Color.White.copy(alpha = 0.05f)
                             )
                         )
@@ -313,8 +368,8 @@ fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
                         width = 1.dp,
                         brush = Brush.linearGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.35f),
-                                Color.White.copy(alpha = 0.08f)
+                                Color.White.copy(alpha = 0.38f),
+                                Color.Cyan.copy(alpha = 0.18f)
                             )
                         ),
                         shape = RoundedCornerShape(28.dp)
@@ -360,7 +415,7 @@ fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
             ) {
                 Text(
                     text = "Samir Ahmed",
-                    color = Color.White.copy(alpha = 0.90f),
+                    color = Color.White.copy(alpha = 0.92f),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 0.5.sp
@@ -556,7 +611,8 @@ fun LumiPlayHomeScreen(
                 details = state.details,
                 isLoading = state.isDetailsLoading,
                 errorText = state.detailsError,
-                onDismiss = { lumiViewModel.closeMovieDetails() }
+                onDismiss = { lumiViewModel.closeMovieDetails() },
+                onStreamLink = { title, url -> lumiViewModel.startStream(title, url) }
             )
         }
     }
@@ -574,7 +630,7 @@ fun LiquidMovieCard(
             .background(
                 Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.12f),
+                        Color.White.copy(alpha = 0.13f),
                         Color.White.copy(alpha = 0.04f)
                     )
                 )
@@ -583,8 +639,8 @@ fun LiquidMovieCard(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.28f),
-                        Color.White.copy(alpha = 0.06f)
+                        Color.White.copy(alpha = 0.30f),
+                        Color.Cyan.copy(alpha = 0.10f)
                     )
                 ),
                 shape = RoundedCornerShape(20.dp)
@@ -631,17 +687,46 @@ fun LiquidMovieCard(
     }
 }
 
+private data class BadgeStyle(
+    val label: String,
+    val bgColor: Color,
+    val fgColor: Color,
+    val icon: ImageVector
+)
+
+private fun resolveLinkBadge(categoryTag: String, titleText: String): BadgeStyle {
+    val combined = "$categoryTag$titleText".lowercase()
+    return when {
+        "1080p" in combined -> BadgeStyle("1080P", Color(0x3322D3EE), Color(0xFF67E8F9), Icons.Rounded.Hd)
+        "720p" in combined -> BadgeStyle("720P", Color(0x3360A5FA), Color(0xFF93C5FD), Icons.Rounded.Hd)
+        "480p" in combined -> BadgeStyle("480P", Color(0x33A78BFA), Color(0xFFC4B5FD), Icons.Rounded.Movie)
+        categoryTag.equals("Watch", ignoreCase = true) || "watch" in combined ->
+            BadgeStyle("STREAM", Color(0x3334D399), Color(0xFF6EE7B7), Icons.Rounded.PlayArrow)
+        categoryTag.equals("Download", ignoreCase = true) || "download" in combined ->
+            BadgeStyle("DL", Color(0x33FBBF24), Color(0xFFFDE68A), Icons.Rounded.Download)
+        else -> BadgeStyle(categoryTag.uppercase(), Color(0x33CBD5E1), Color(0xFFE2E8F0), Icons.Rounded.Link)
+    }
+}
+
 @Composable
 fun MovieDetailsDialog(
     movie: MovieItem,
     details: MovieDetailsResponse?,
     isLoading: Boolean,
     errorText: String?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onStreamLink: (String, String) -> Unit
 ) {
     val context = LocalContext.current
+    val previewPoster = details?.poster?.takeIf { it.isNotBlank() } ?: movie.poster
 
-    fun openExternalUrl(rawUrl: String?) {
+    fun copyToClipboard(label: String, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+    }
+
+    fun openExternalBrowser(rawUrl: String?) {
         if (rawUrl.isNullOrBlank()) return
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl))
@@ -654,18 +739,18 @@ fun MovieDetailsDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 580.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xFF0E1324))
+                .heightIn(max = 640.dp)
+                .clip(RoundedCornerShape(26.dp))
+                .background(Color(0xFF0C1222))
                 .border(
                     width = 1.dp,
                     brush = Brush.linearGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = 0.30f),
-                            Color.Cyan.copy(alpha = 0.18f)
+                            Color.White.copy(alpha = 0.34f),
+                            Color.Cyan.copy(alpha = 0.22f)
                         )
                     ),
-                    shape = RoundedCornerShape(24.dp)
+                    shape = RoundedCornerShape(26.dp)
                 )
                 .padding(16.dp)
         ) {
@@ -674,15 +759,38 @@ fun MovieDetailsDialog(
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = details?.title?.takeIf { it.isNotBlank() } ?: (movie.title ?: "Details"),
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(end = 8.dp)
-                )
+                if (!previewPoster.isNullOrBlank()) {
+                    AsyncImage(
+                        model = previewPoster,
+                        contentDescription = movie.title ?: "Poster preview",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .width(64.dp)
+                            .height(92.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = details?.title?.takeIf { it.isNotBlank() } ?: (movie.title ?: "Details"),
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Liquid Stream & Links",
+                        color = Color(0xFF67E8F9),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
                 IconButton(onClick = onDismiss) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
@@ -692,13 +800,13 @@ fun MovieDetailsDialog(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (isLoading) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(140.dp),
+                        .height(150.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(color = Color(0xFF67E8F9))
@@ -722,24 +830,31 @@ fun MovieDetailsDialog(
                 }
 
                 LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
                     if (!movie.link.isNullOrBlank()) {
                         item {
-                            LinkActionRow(
-                                tag = "Page",
-                                title = "Open Movie Page",
-                                onClick = { openExternalUrl(movie.link) }
+                            LinkActionCard(
+                                categoryTag = "Page",
+                                title = "Movie Source Page",
+                                url = movie.link,
+                                onStream = { onStreamLink(movie.title ?: "Stream", movie.link) },
+                                onCopy = { copyToClipboard("Page Link", movie.link) },
+                                onBrowser = { openExternalBrowser(movie.link) }
                             )
                         }
                     }
 
                     items(allLinks) { (tag, entry) ->
-                        LinkActionRow(
-                            tag = tag,
+                        val url = entry.resolvedUrl() ?: return@items
+                        LinkActionCard(
+                            categoryTag = tag,
                             title = entry.resolvedTitle(),
-                            onClick = { openExternalUrl(entry.resolvedUrl()) }
+                            url = url,
+                            onStream = { onStreamLink(entry.resolvedTitle(), url) },
+                            onCopy = { copyToClipboard(entry.resolvedTitle(), url) },
+                            onBrowser = { openExternalBrowser(url) }
                         )
                     }
                 }
@@ -749,41 +864,232 @@ fun MovieDetailsDialog(
 }
 
 @Composable
-fun LinkActionRow(
-    tag: String,
+fun LinkActionCard(
+    categoryTag: String,
     title: String,
-    onClick: () -> Unit
+    url: String,
+    onStream: () -> Unit,
+    onCopy: () -> Unit,
+    onBrowser: () -> Unit
 ) {
-    Row(
+    val badge = resolveLinkBadge(categoryTag, title)
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(14.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
+            .padding(12.dp)
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(
-                text = tag,
-                color = Color(0xFF67E8F9),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 13.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f).padding(end = 8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(badge.bgColor)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = badge.icon,
+                        contentDescription = null,
+                        tint = badge.fgColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = badge.label,
+                        color = badge.fgColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-        Icon(
-            imageVector = Icons.Rounded.OpenInBrowser,
-            contentDescription = "Open",
-            tint = Color(0xFF93C5FD)
-        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x3322D3EE))
+                    .border(1.dp, Color(0x6622D3EE), RoundedCornerShape(12.dp))
+                    .clickable { onStream() }
+                    .padding(vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = null,
+                    tint = Color(0xFF67E8F9),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Stream in App",
+                    color = Color(0xFF67E8F9),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            IconButton(
+                onClick = onCopy,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.08f))
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ContentCopy,
+                    contentDescription = "Copy Link",
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+
+            IconButton(
+                onClick = onBrowser,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.08f))
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInBrowser,
+                    contentDescription = "Open in Browser",
+                    tint = Color(0xFF93C5FD),
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun LumiStreamPlayerDialog(
+    session: StreamSession,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val lowerUrl = session.url.lowercase()
+    val isDirectMedia = lowerUrl.endsWith(".mp4") || lowerUrl.endsWith(".m3u8") || lowerUrl.endsWith(".mkv") || lowerUrl.endsWith(".webm")
+
+    val exoPlayer = remember(session.url, isDirectMedia) {
+        if (isDirectMedia) {
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(session.url))
+                prepare()
+                playWhenReady = true
+            }
+        } else {
+            null
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        onDispose {
+            exoPlayer?.release()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF05070E))
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0E1426))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = session.title,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp)
+                )
+
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close Stream",
+                        tint = Color.White
+                    )
+                }
+            }
+
+            if (isDirectMedia && exoPlayer != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = exoPlayer
+                            useController = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            webChromeClient = WebChromeClient()
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    return false
+                                }
+                            }
+                            loadUrl(session.url)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
     }
 }
