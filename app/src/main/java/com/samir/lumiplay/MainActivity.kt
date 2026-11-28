@@ -7,13 +7,15 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.os.Bundle
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
+import android.view.ViewGroup
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -41,7 +43,6 @@ import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -61,14 +62,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackParameters
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -90,14 +89,12 @@ data class LumiUiState(
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val activeQuery: String = "",
-    // Details
     val selectedAnime: AnimeSaltItem? = null,
     val animeDetails: AnimeSaltDetails? = null,
     val selectedSeason: Int = 1,
     val isDetailsLoading: Boolean = false,
     val detailsError: String? = null,
     val isLoadingStream: Boolean = false,
-    // Active Player
     val activeStream: StreamSession? = null
 )
 
@@ -317,8 +314,13 @@ fun LumiPlayRoot(lumiViewModel: LumiViewModel = viewModel()) {
 
     val streamSession = state.activeStream
     if (streamSession != null) {
-    androidx.activity.compose.BackHandler { onDismiss() }
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        ProAnimePlayerDialog(
+            session = streamSession,
+            onDismiss = { lumiViewModel.closeStream() }
+        )
+    }
+}
+
 @Composable
 fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
     LiquidBackground {
@@ -946,13 +948,13 @@ fun ProAnimePlayerDialog(
 
     fun setSystemBarsVisible(visible: Boolean) {
         val window = activity?.window ?: return
-        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.systemBarsBehavior =
-            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         if (visible) {
-            controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller.show(WindowInsetsCompat.Type.systemBars())
         } else {
-            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller.hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -977,271 +979,260 @@ fun ProAnimePlayerDialog(
         }
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
+    BackHandler { onDismiss() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .then(if (!isLandscape) Modifier.statusBarsPadding().navigationBarsPadding() else Modifier)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(if (!isLandscape) Modifier.statusBarsPadding().navigationBarsPadding() else Modifier)
-            ) {
-                if (showTopUi) {
-                    // Top Bar
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xE60E1426))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
-                            Text(
-                                text = session.title,
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "${currentServer.name} • In-App Stream",
-                                color = Color(0xFF67E8F9),
-                                fontSize = 11.sp
-                            )
-                        }
-
-                        IconButton(onClick = { showControlsPanel = !showControlsPanel }) {
-                            Icon(
-                                imageVector = Icons.Rounded.Brightness6,
-                                contentDescription = "Controls",
-                                tint = if (showControlsPanel) Color(0xFF67E8F9) else Color.White
-                            )
-                        }
-
-                        IconButton(onClick = { toggleOrientation() }) {
-                            Icon(
-                                imageVector = Icons.Rounded.ScreenRotation,
-                                contentDescription = "Rotate",
-                                tint = Color.White
-                            )
-                        }
-
-                        IconButton(onClick = onDismiss) {
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = "Close",
-                                tint = Color.White
-                            )
-                        }
+            if (showTopUi) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xE60E1426))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
+                        Text(
+                            text = session.title,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${currentServer.name} • In-App Stream",
+                            color = Color(0xFF67E8F9),
+                            fontSize = 11.sp
+                        )
                     }
 
-                    // Server Switcher Bar
-                    LazyRow(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xE60A0F1E))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(session.servers.indices.toList()) { idx ->
-                            val srv = session.servers[idx]
-                            val active = idx == selectedServerIdx
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(if (active) Color(0x3322D3EE) else Color.White.copy(alpha = 0.08f))
-                                    .border(
-                                        1.dp,
-                                        if (active) Color(0x9922D3EE) else Color.White.copy(alpha = 0.16f),
-                                        RoundedCornerShape(50)
-                                    )
-                                    .clickable { selectedServerIdx = idx }
-                                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                            ) {
-                                Text(
-                                    text = srv.name,
-                                    color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.85f),
-                                    fontSize = 11.sp,
-                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
-                        }
+                    IconButton(onClick = { showControlsPanel = !showControlsPanel }) {
+                        Icon(
+                            imageVector = Icons.Rounded.Brightness6,
+                            contentDescription = "Controls",
+                            tint = if (showControlsPanel) Color(0xFF67E8F9) else Color.White
+                        )
                     }
 
-                    // Brightness & Volume Sliders
-                    if (showControlsPanel) {
-                        Column(
+                    IconButton(onClick = { toggleOrientation() }) {
+                        Icon(
+                            imageVector = Icons.Rounded.ScreenRotation,
+                            contentDescription = "Rotate",
+                            tint = Color.White
+                        )
+                    }
+
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close",
+                            tint = Color.White
+                        )
+                    }
+                }
+
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xE60A0F1E))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(session.servers.indices.toList()) { idx ->
+                        val srv = session.servers[idx]
+                        val active = idx == selectedServerIdx
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xE611182C))
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(if (active) Color(0x3322D3EE) else Color.White.copy(alpha = 0.08f))
+                                .border(
+                                    1.dp,
+                                    if (active) Color(0x9922D3EE) else Color.White.copy(alpha = 0.16f),
+                                    RoundedCornerShape(50)
+                                )
+                                .clickable { selectedServerIdx = idx }
+                                .padding(horizontal = 12.dp, vertical = 5.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Brightness6,
-                                    contentDescription = null,
-                                    tint = Color(0xFFFDE68A),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Slider(
-                                    value = brightnessLevel,
-                                    onValueChange = { v ->
-                                        brightnessLevel = v
-                                        activity?.window?.let { win ->
-                                            val lp = win.attributes
-                                            lp.screenBrightness = v.coerceIn(0.05f, 1f)
-                                            win.attributes = lp
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.VolumeUp,
-                                    contentDescription = null,
-                                    tint = Color(0xFF67E8F9),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Slider(
-                                    value = volumeLevel,
-                                    onValueChange = { v ->
-                                        volumeLevel = v
-                                        val targetVol = (v * maxVol).toInt().coerceIn(0, maxVol)
-                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
+                            Text(
+                                text = srv.name,
+                                color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.85f),
+                                fontSize = 11.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                            )
                         }
                     }
                 }
 
-                // Fullscreen Video Area
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .background(Color.Black)
-                ) {
-                    key(currentServer.url) {
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    layoutParams = android.view.ViewGroup.LayoutParams(
-                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                                    )
-                                    android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-                                    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                                    settings.javaScriptEnabled = true
-                                    settings.useWideViewPort = true
-                                    settings.loadWithOverviewMode = true
-                                    settings.databaseEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.setSupportMultipleWindows(false)
-                                    settings.javaScriptCanOpenWindowsAutomatically = false
-                                    settings.mediaPlaybackRequiresUserGesture = false
-                                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    settings.userAgentString =
-                                        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-                                    webChromeClient = WebChromeClient()
-                                    webViewClient = object : WebViewClient() {
-                                        override fun shouldOverrideUrlLoading(
-                                            view: WebView?,
-                                            request: WebResourceRequest?
-                                        ): Boolean {
-                                            val rawUrl = request?.url?.toString().orEmpty().lowercase()
-                                            val allowed = listOf("animesalt", "ravok", "abyss", "cybervynx", "plyr", "about:blank")
-                                            if (allowed.any { rawUrl.contains(it) }) {
-                                                return false
-                                            }
-                                            return true
-                                        }
+                if (showControlsPanel) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xE611182C))
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.Brightness6,
+                                contentDescription = null,
+                                tint = Color(0xFFFDE68A),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Slider(
+                                value = brightnessLevel,
+                                onValueChange = { v ->
+                                    brightnessLevel = v
+                                    activity?.window?.let { win ->
+                                        val lp = win.attributes
+                                        lp.screenBrightness = v.coerceIn(0.05f, 1f)
+                                        win.attributes = lp
                                     }
-                                    val iframeHtml = """
-                                        <!DOCTYPE html>
-                                        <html>
-                                        <head>
-                                          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                                          <style>
-                                            html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
-                                            iframe { position: fixed; top: 0; left: 0; border: 0; width: 100vw; height: 100vh; }
-                                          </style>
-                                        </head>
-                                        <body>
-                                          <iframe src="${currentServer.url}" allowfullscreen allow="autoplay; fullscreen; encrypted-media" referrerpolicy="origin"></iframe>
-                                        </body>
-                                        </html>
-                                    """.trimIndent()
-                                    loadDataWithBaseURL(
-                                        "${AnimeSaltScraper.BASE_URL}/",
-                                        iframeHtml,
-                                        "text/html",
-                                        "UTF-8",
-                                        null
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.VolumeUp,
+                                contentDescription = null,
+                                tint = Color(0xFF67E8F9),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Slider(
+                                value = volumeLevel,
+                                onValueChange = { v ->
+                                    volumeLevel = v
+                                    val targetVol = (v * maxVol).toInt().coerceIn(0, maxVol)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }
 
-            // Floating Toggle Button when in Landscape Fullscreen
-            if (isLandscape) {
-                Row(
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color.Black)
+            ) {
+                key(currentServer.url) {
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                CookieManager.getInstance().setAcceptCookie(true)
+                                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                settings.javaScriptEnabled = true
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                settings.databaseEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.setSupportMultipleWindows(false)
+                                settings.javaScriptCanOpenWindowsAutomatically = false
+                                settings.mediaPlaybackRequiresUserGesture = false
+                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                settings.userAgentString =
+                                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                                webChromeClient = WebChromeClient()
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        request: WebResourceRequest?
+                                    ): Boolean {
+                                        val rawUrl = request?.url?.toString().orEmpty().lowercase()
+                                        val allowed = listOf("animesalt", "ravok", "abyss", "cybervynx", "plyr", "about:blank")
+                                        if (allowed.any { rawUrl.contains(it) }) {
+                                            return false
+                                        }
+                                        return true
+                                    }
+                                }
+                                val iframeHtml = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                      <style>
+                                        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+                                        iframe { position: fixed; top: 0; left: 0; border: 0; width: 100vw; height: 100vh; }
+                                      </style>
+                                    </head>
+                                    <body>
+                                      <iframe src="${currentServer.url}" allowfullscreen allow="autoplay; fullscreen; encrypted-media" referrerpolicy="origin"></iframe>
+                                    </body>
+                                    </html>
+                                """.trimIndent()
+                                loadDataWithBaseURL(
+                                    "${AnimeSaltScraper.BASE_URL}/",
+                                    iframeHtml,
+                                    "text/html",
+                                    "UTF-8",
+                                    null
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+
+        if (isLandscape) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0x88070913))
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))
+                        .clickable { showTopUi = !showTopUi }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
+                    Text(
+                        text = if (showTopUi) "Hide Bar" else "Menu",
+                        color = Color(0xFF67E8F9),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                if (!showTopUi) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
                             .background(Color(0x88070913))
                             .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))
-                            .clickable { showTopUi = !showTopUi }
+                            .clickable { toggleOrientation() }
                             .padding(horizontal = 10.dp, vertical = 5.dp)
                     ) {
                         Text(
-                            text = if (showTopUi) "Hide Bar" else "Menu",
-                            color = Color(0xFF67E8F9),
+                            text = "Exit Full",
+                            color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
-                    }
-
-                    if (!showTopUi) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(Color(0x88070913))
-                                .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))
-                                .clickable { toggleOrientation() }
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
-                        ) {
-                            Text(
-                                text = "Exit Full",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
                     }
                 }
             }
