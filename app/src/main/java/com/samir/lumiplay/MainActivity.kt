@@ -1221,21 +1221,12 @@ fun ProAnimePlayerDialog(
                                             view: WebView?,
                                             request: WebResourceRequest?
                                         ): Boolean {
-                                            val rawUrl = request?.url?.toString().orEmpty()
-                                            val lower = rawUrl.lowercase()
-                                            if (blockedKeywords.any { key -> lower.contains(key) }) {
-                                                Toast.makeText(ctx, "Ad blocked", Toast.LENGTH_SHORT).show()
-                                                return true
+                                            val rawUrl = request?.url?.toString().orEmpty().lowercase()
+                                            val allowed = listOf("animesalt", "ravok", "abyss", "cybervynx", "plyr", "about:blank")
+                                            if (allowed.any { rawUrl.contains(it) }) {
+                                                return false
                                             }
-                                            return false
-                                        }
-
-                                        override fun onLoadResource(view: WebView?, url: String?) {
-                                            super.onLoadResource(view, url)
-                                            if (!useExoPlayer && looksLikeDirectStream(url) && url != null) {
-                                                directVideoUrl = url
-                                                useExoPlayer = true
-                                            }
+                                            return true
                                         }
                                     }
                                     val iframeHtml = """
