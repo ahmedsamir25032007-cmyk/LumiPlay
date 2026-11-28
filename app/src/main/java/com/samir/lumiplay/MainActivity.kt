@@ -112,7 +112,7 @@ data class StreamSession(
 enum class MediaCategory(val label: String) {
     MOVIES("Movies"),
     TV("TV Shows"),
-    ANIME("Anime")
+    ANIME("Anime (Hindi)")
 }
 
 interface LumiApiService {
@@ -121,9 +121,6 @@ interface LumiApiService {
 
     @GET("tv")
     suspend fun getTv(@Query("page") page: Int = 1): TmdbListResponse
-
-    @GET("anime")
-    suspend fun getAnime(@Query("page") page: Int = 1): TmdbListResponse
 
     @GET("search")
     suspend fun searchMedia(
@@ -156,16 +153,28 @@ data class LumiUiState(
     val showWelcome: Boolean = true,
     val selectedCategory: MediaCategory = MediaCategory.MOVIES,
     val items: List<TmdbMediaItem> = emptyList(),
+    val animeItems: List<AnimeSaltItem> = emptyList(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val activeQuery: String = "",
+    // TMDB Details
     val selectedItem: TmdbMediaItem? = null,
     val selectedSeason: Int = 1,
     val selectedEpisode: Int = 1,
     val servers: List<StreamServer> = emptyList(),
     val isServersLoading: Boolean = false,
     val serversError: String? = null,
+    // AnimeSalt Details & Streams
+    val selectedAnime: AnimeSaltItem? = null,
+    val animeDetails: AnimeSaltDetails? = null,
+    val isAnimeDetailsLoading: Boolean = false,
+    val animeDetailsError: String? = null,
+    val selectedAnimeEpisodeTitle: String? = null,
+    val animeServers: List<AnimeSaltServer> = emptyList(),
+    val isAnimeServersLoading: Boolean = false,
+    val animeServersError: String? = null,
+    // Player
     val activeStream: StreamSession? = null
 )
 
@@ -200,25 +209,33 @@ class LumiViewModel : ViewModel() {
                 activeQuery = ""
             )
             try {
-                val response = when (category) {
-                    MediaCategory.MOVIES -> LumiNetwork.api.getMovies(1)
-                    MediaCategory.TV -> LumiNetwork.api.getTv(1)
-                    MediaCategory.ANIME -> LumiNetwork.api.getAnime(1)
+                if (category == MediaCategory.ANIME) {
+                    val animeList = AnimeSaltScraper.fetchHome()
+                    _uiState.value = _uiState.value.copy(
+                        animeItems = animeList,
+                        isLoading = false
+                    )
+                } else {
+                    val response = when (category) {
+                        MediaCategory.MOVIES -> LumiNetwork.api.getMovies(1)
+                        MediaCategory.TV -> LumiNetwork.api.getTv(1)
+                        MediaCategory.ANIME -> TmdbListResponse()
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        items = response.results,
+                        isLoading = false
+                    )
                 }
-                _uiState.value = _uiState.value.copy(
-                    items = response.results,
-                    isLoading = false
-                )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = "Failed to load data. Check your internet or server."
+                    errorMessage = "Failed to load data. Check your internet."
                 )
             }
         }
     }
 
-fun search(queryText: String = _uiState.value.searchQuery) {
+    fun search(queryText: String = _uiState.value.searchQuery) {
         val trimmed = queryText.trim()
         if (trimmed.isEmpty()) {
             loadCategory(_uiState.value.selectedCategory)
@@ -231,11 +248,19 @@ fun search(queryText: String = _uiState.value.searchQuery) {
                 activeQuery = trimmed
             )
             try {
-                val response = LumiNetwork.api.searchMedia(trimmed, 1)
-                _uiState.value = _uiState.value.copy(
-                    items = response.results,
-                    isLoading = false
-                )
+                if (_uiState.value.selectedCategory == MediaCategory.ANIME) {
+                    val results = AnimeSaltScraper.search(trimmed)
+                    _uiState.value = _uiState.value.copy(
+                        animeItems = results,
+                        isLoading = false
+                    )
+                } else {
+                    val response = LumiNetwork.api.searchMedia(trimmed, 1)
+                    _uiState.value = _uiState.value.copy(
+                        items = response.results,
+                        isLoading = false
+                    )
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -245,6 +270,7 @@ fun search(queryText: String = _uiState.value.searchQuery) {
         }
     }
 
+    // TMDB Item
     fun openItemDetails(item: TmdbMediaItem, season: Int = 1, episode: Int = 1) {
         _uiState.value = _uiState.value.copy(
             selectedItem = item,
@@ -291,12 +317,90 @@ fun search(queryText: String = _uiState.value.searchQuery) {
         }
     }
 
-fun closeItemDetails() {
+    fun closeItemDetails() {
         _uiState.value = _uiState.value.copy(
             selectedItem = null,
             servers = emptyList(),
             isServersLoading = false,
             serversError = null
+        )
+    }
+
+    // AnimeSalt Item
+    fun openAnimeDetails(item: AnimeSaltItem) {
+        if (item.type == "episode") {
+            _uiState.value = _uiState.value.copy(
+                selectedAnime = item,
+                animeDetails = null,
+                isAnimeDetailsLoading = false,
+                animeDetailsError = null
+            )
+            loadAnimeEpisodeStreams(item.title, item.url)
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            selectedAnime = item,
+            animeDetails = null,
+            isAnimeDetailsLoading = true,
+            animeDetailsError = null,
+            selectedAnimeEpisodeTitle = null,
+            animeServers = emptyList(),
+            animeServersError = null
+        )
+        viewModelScope.launch {
+            try {
+                val details = AnimeSaltScraper.fetchDetails(item.url, item.slug)
+                _uiState.value = _uiState.value.copy(
+                    animeDetails = details,
+                    isAnimeDetailsLoading = false
+                )
+                if (details.episodes.isEmpty()) {
+                    loadAnimeEpisodeStreams(item.title, item.url)
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isAnimeDetailsLoading = false,
+                    animeDetailsError = "Could not load episodes."
+                )
+            }
+        }
+    }
+
+    fun loadAnimeEpisodeStreams(epTitle: String, epUrl: String) {
+        _uiState.value = _uiState.value.copy(
+            selectedAnimeEpisodeTitle = epTitle,
+            animeServers = emptyList(),
+            isAnimeServersLoading = true,
+            animeServersError = null
+        )
+        viewModelScope.launch {
+            try {
+                val streams = AnimeSaltScraper.fetchEpisodeStreams(epUrl)
+                _uiState.value = _uiState.value.copy(
+                    animeServers = streams,
+                    isAnimeServersLoading = false,
+                    animeServersError = if (streams.isEmpty()) "No stream servers found." else null
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isAnimeServersLoading = false,
+                    animeServersError = "Failed to load episode streams."
+                )
+            }
+        }
+    }
+
+    fun closeAnimeDetails() {
+        _uiState.value = _uiState.value.copy(
+            selectedAnime = null,
+            animeDetails = null,
+            isAnimeDetailsLoading = false,
+            animeDetailsError = null,
+            selectedAnimeEpisodeTitle = null,
+            animeServers = emptyList(),
+            isAnimeServersLoading = false,
+            animeServersError = null
         )
     }
 
@@ -363,7 +467,7 @@ fun LumiPlayRoot(lumiViewModel: LumiViewModel = viewModel()) {
         }
     }
 
-val streamSession = state.activeStream
+    val streamSession = state.activeStream
     if (streamSession != null) {
         LumiStreamPlayerDialog(
             session = streamSession,
@@ -527,7 +631,10 @@ fun LumiPlayHomeScreen(
                             ),
                         placeholder = {
                             Text(
-                                text = "Search movies, TV, anime...",
+                                text = if (state.selectedCategory == MediaCategory.ANIME)
+                                    "Search Hindi/Dub anime..."
+                                else
+                                    "Search movies or TV...",
                                 color = Color.White.copy(alpha = 0.55f),
                                 fontSize = 14.sp
                             )
@@ -583,7 +690,7 @@ fun LumiPlayHomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         MediaCategory.entries.forEach { category ->
-                            val isSelected = state.activeQuery.isEmpty() && state.selectedCategory == category
+                            val isSelected = state.selectedCategory == category
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
@@ -607,7 +714,8 @@ fun LumiPlayHomeScreen(
                                     text = category.label,
                                     color = if (isSelected) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.78f),
                                     fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -648,6 +756,30 @@ fun LumiPlayHomeScreen(
                         }
                     }
 
+                    state.selectedCategory == MediaCategory.ANIME -> {
+                        if (state.animeItems.isEmpty()) {
+                            Text(
+                                text = "No anime found.",
+                                color = Color.White.copy(alpha = 0.75f),
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                items(state.animeItems) { anime ->
+                                    LiquidAnimeCard(
+                                        item = anime,
+                                        onClick = { lumiViewModel.openAnimeDetails(anime) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     state.items.isEmpty() -> {
                         Text(
                             text = "No results found.",
@@ -675,7 +807,7 @@ fun LumiPlayHomeScreen(
             }
         }
 
-val selectedItem = state.selectedItem
+        val selectedItem = state.selectedItem
         if (selectedItem != null) {
             MediaDetailsDialog(
                 item = selectedItem,
@@ -688,6 +820,295 @@ val selectedItem = state.selectedItem
                 onDismiss = { lumiViewModel.closeItemDetails() },
                 onStreamLink = { title, url -> lumiViewModel.startStream(title, url) }
             )
+        }
+
+        val selectedAnime = state.selectedAnime
+        if (selectedAnime != null) {
+            AnimeSaltDetailsDialog(
+                item = selectedAnime,
+                details = state.animeDetails,
+                isDetailsLoading = state.isAnimeDetailsLoading,
+                detailsError = state.animeDetailsError,
+                selectedEpisodeTitle = state.selectedAnimeEpisodeTitle,
+                servers = state.animeServers,
+                isServersLoading = state.isAnimeServersLoading,
+                serversError = state.animeServersError,
+                onSelectEpisode = { ep -> lumiViewModel.loadAnimeEpisodeStreams(ep.title, ep.url) },
+                onDismiss = { lumiViewModel.closeAnimeDetails() },
+                onStreamLink = { title, url -> lumiViewModel.startStream(title, url) }
+            )
+        }
+    }
+}
+
+@Composable
+fun LiquidAnimeCard(
+    item: AnimeSaltItem,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.13f),
+                        Color.White.copy(alpha = 0.04f)
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.30f),
+                        Color.Cyan.copy(alpha = 0.10f)
+                    )
+                ),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .clickable { onClick() }
+            .padding(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.68f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.05f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (item.poster.isNotBlank()) {
+                AsyncImage(
+                    model = item.poster,
+                    contentDescription = item.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Rounded.Movie,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.4f),
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = item.title.ifBlank { "Untitled" },
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+
+        Text(
+            text = item.type.uppercase(),
+            color = Color(0xFF67E8F9),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+        )
+    }
+}
+
+@Composable
+fun AnimeSaltDetailsDialog(
+    item: AnimeSaltItem,
+    details: AnimeSaltDetails?,
+    isDetailsLoading: Boolean,
+    detailsError: String?,
+    selectedEpisodeTitle: String?,
+    servers: List<AnimeSaltServer>,
+    isServersLoading: Boolean,
+    serversError: String?,
+    onSelectEpisode: (AnimeSaltEpisode) -> Unit,
+    onDismiss: () -> Unit,
+    onStreamLink: (String, String) -> Unit
+) {
+    val context = LocalContext.current
+
+    fun copyToClipboard(label: String, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+    }
+
+    fun openExternalBrowser(rawUrl: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl))
+            context.startActivity(intent)
+        } catch (_: Exception) {
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 660.dp)
+                .clip(RoundedCornerShape(26.dp))
+                .background(Color(0xFF0C1222))
+                .border(
+                    width = 1.dp,
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.34f),
+                            Color.Cyan.copy(alpha = 0.22f)
+                        )
+                    ),
+                    shape = RoundedCornerShape(26.dp)
+                )
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val poster = details?.poster?.takeIf { it.isNotBlank() } ?: item.poster
+                if (poster.isNotBlank()) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .width(60.dp)
+                            .height(86.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = details?.title?.takeIf { it.isNotBlank() } ?: item.title,
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = selectedEpisodeTitle ?: "AnimeSalt • Hindi / Multi Audio",
+                        color = Color(0xFF67E8F9),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        tint = Color.White.copy(alpha = 0.8f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (isDetailsLoading || isServersLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = Color(0xFF67E8F9))
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    if (servers.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "Select Server / Audio",
+                                color = Color(0xFF93C5FD),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        items(servers) { server ->
+                            val label = "${selectedEpisodeTitle ?: item.title} • ${server.name}"
+                            ServerActionCard(
+                                title = server.name,
+                                onStream = { onStreamLink(label, server.url) },
+                                onCopy = { copyToClipboard(server.name, server.url) },
+                                onBrowser = { openExternalBrowser(server.url) }
+                            )
+                        }
+                    } else if (serversError != null) {
+                        item {
+                            Text(
+                                text = serversError,
+                                color = Color(0xFFFCA5A5),
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
+                    val episodes = details?.episodes.orEmpty()
+                    if (episodes.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Episodes (${episodes.size})",
+                                color = Color(0xFF93C5FD),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        items(episodes) { ep ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color.White.copy(alpha = 0.08f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(14.dp))
+                                    .clickable { onSelectEpisode(ep) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = ep.title,
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color(0xFF67E8F9),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    } else if (detailsError != null) {
+                        item {
+                            Text(
+                                text = detailsError,
+                                color = Color(0xFFFCA5A5),
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
