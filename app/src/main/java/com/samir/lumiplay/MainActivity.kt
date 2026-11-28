@@ -1,11 +1,11 @@
 package com.samir.lumiplay
 
 import android.annotation.SuppressLint
-import android.content.ClipData
-import android.content.ClipboardManager
+import android.app.Activity
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.media.AudioManager
 import android.os.Bundle
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -25,7 +25,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -34,13 +34,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Brightness6
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Movie
-import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -64,6 +66,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
@@ -72,109 +75,29 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.GET
-import retrofit2.http.Path
-import retrofit2.http.Query
-
-data class TmdbMediaItem(
-    val id: Int = 0,
-    val mediaType: String = "movie",
-    val title: String = "",
-    val year: String = "",
-    val rating: Double = 0.0,
-    val poster: String? = null,
-    val overview: String = ""
-)
-
-data class TmdbListResponse(
-    val page: Int = 1,
-    val results: List<TmdbMediaItem> = emptyList()
-)
-
-data class StreamServer(
-    val name: String = "",
-    val url: String = ""
-)
-
-data class StreamResponse(
-    val tmdbId: String? = null,
-    val type: String? = null,
-    val servers: List<StreamServer> = emptyList()
-)
 
 data class StreamSession(
     val title: String,
-    val url: String
+    val servers: List<AnimeSaltServer>,
+    val initialIndex: Int = 0
 )
-
-enum class MediaCategory(val label: String) {
-    MOVIES("Movies"),
-    TV("TV Shows"),
-    ANIME("Anime (Hindi)")
-}
-
-interface LumiApiService {
-    @GET("movies")
-    suspend fun getMovies(@Query("page") page: Int = 1): TmdbListResponse
-
-    @GET("tv")
-    suspend fun getTv(@Query("page") page: Int = 1): TmdbListResponse
-
-    @GET("search")
-    suspend fun searchMedia(
-        @Query("q") query: String,
-        @Query("page") page: Int = 1
-    ): TmdbListResponse
-
-    @GET("stream/movie/{tmdbId}")
-    suspend fun getMovieStream(@Path("tmdbId") tmdbId: Int): StreamResponse
-
-    @GET("stream/tv/{tmdbId}")
-    suspend fun getTvStream(
-        @Path("tmdbId") tmdbId: Int,
-        @Query("s") season: Int = 1,
-        @Query("e") episode: Int = 1
-    ): StreamResponse
-}
-
-object LumiNetwork {
-    val api: LumiApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://lumiplay-api-2bps.vercel.app/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(LumiApiService::class.java)
-    }
-}
 
 data class LumiUiState(
     val showWelcome: Boolean = true,
-    val selectedCategory: MediaCategory = MediaCategory.MOVIES,
-    val items: List<TmdbMediaItem> = emptyList(),
+    val selectedCategory: AnimeCategory = AnimeCategory.HOME,
     val animeItems: List<AnimeSaltItem> = emptyList(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val activeQuery: String = "",
-    // TMDB Details
-    val selectedItem: TmdbMediaItem? = null,
-    val selectedSeason: Int = 1,
-    val selectedEpisode: Int = 1,
-    val servers: List<StreamServer> = emptyList(),
-    val isServersLoading: Boolean = false,
-    val serversError: String? = null,
-    // AnimeSalt Details & Streams
+    // Details
     val selectedAnime: AnimeSaltItem? = null,
     val animeDetails: AnimeSaltDetails? = null,
-    val isAnimeDetailsLoading: Boolean = false,
-    val animeDetailsError: String? = null,
-    val selectedAnimeEpisodeTitle: String? = null,
-    val animeServers: List<AnimeSaltServer> = emptyList(),
-    val isAnimeServersLoading: Boolean = false,
-    val animeServersError: String? = null,
-    // Player
+    val selectedSeason: Int = 1,
+    val isDetailsLoading: Boolean = false,
+    val detailsError: String? = null,
+    val isLoadingStream: Boolean = false,
+    // Active Player
     val activeStream: StreamSession? = null
 )
 
@@ -183,9 +106,9 @@ class LumiViewModel : ViewModel() {
     val uiState: StateFlow<LumiUiState> = _uiState.asStateFlow()
 
     init {
-        loadCategory(MediaCategory.MOVIES)
+        loadCategory(AnimeCategory.HOME)
         viewModelScope.launch {
-            delay(2200)
+            delay(1800)
             if (_uiState.value.showWelcome) {
                 _uiState.value = _uiState.value.copy(showWelcome = false)
             }
@@ -200,7 +123,7 @@ class LumiViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(searchQuery = newQuery)
     }
 
-    fun loadCategory(category: MediaCategory = _uiState.value.selectedCategory) {
+    fun loadCategory(category: AnimeCategory = _uiState.value.selectedCategory) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 selectedCategory = category,
@@ -209,27 +132,15 @@ class LumiViewModel : ViewModel() {
                 activeQuery = ""
             )
             try {
-                if (category == MediaCategory.ANIME) {
-                    val animeList = AnimeSaltScraper.fetchHome()
-                    _uiState.value = _uiState.value.copy(
-                        animeItems = animeList,
-                        isLoading = false
-                    )
-                } else {
-                    val response = when (category) {
-                        MediaCategory.MOVIES -> LumiNetwork.api.getMovies(1)
-                        MediaCategory.TV -> LumiNetwork.api.getTv(1)
-                        MediaCategory.ANIME -> TmdbListResponse()
-                    }
-                    _uiState.value = _uiState.value.copy(
-                        items = response.results,
-                        isLoading = false
-                    )
-                }
+                val list = AnimeSaltScraper.fetchCategory(category)
+                _uiState.value = _uiState.value.copy(
+                    animeItems = list,
+                    isLoading = false
+                )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = "Failed to load data. Check your internet."
+                    errorMessage = "ডেটা লোড করা যায়নি। ইন্টারনেট চেক করে আবার চেষ্টা করো।"
                 )
             }
         }
@@ -248,144 +159,82 @@ class LumiViewModel : ViewModel() {
                 activeQuery = trimmed
             )
             try {
-                if (_uiState.value.selectedCategory == MediaCategory.ANIME) {
-                    val results = AnimeSaltScraper.search(trimmed)
-                    _uiState.value = _uiState.value.copy(
-                        animeItems = results,
-                        isLoading = false
-                    )
-                } else {
-                    val response = LumiNetwork.api.searchMedia(trimmed, 1)
-                    _uiState.value = _uiState.value.copy(
-                        items = response.results,
-                        isLoading = false
-                    )
-                }
+                val results = AnimeSaltScraper.search(trimmed)
+                _uiState.value = _uiState.value.copy(
+                    animeItems = results,
+                    isLoading = false
+                )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = "Search failed. Please try again."
+                    errorMessage = "সার্চ করা যায়নি। আবার চেষ্টা করো।"
                 )
             }
         }
     }
 
-    // TMDB Item
-    fun openItemDetails(item: TmdbMediaItem, season: Int = 1, episode: Int = 1) {
-        _uiState.value = _uiState.value.copy(
-            selectedItem = item,
-            selectedSeason = season,
-            selectedEpisode = episode,
-            servers = emptyList(),
-            isServersLoading = true,
-            serversError = null
-        )
-        fetchServersForSelected(item, season, episode)
-    }
-
-    fun updateSeasonEpisode(season: Int, episode: Int) {
-        val item = _uiState.value.selectedItem ?: return
-        val safeSeason = season.coerceAtLeast(1)
-        val safeEpisode = episode.coerceAtLeast(1)
-        _uiState.value = _uiState.value.copy(
-            selectedSeason = safeSeason,
-            selectedEpisode = safeEpisode,
-            isServersLoading = true,
-            serversError = null
-        )
-        fetchServersForSelected(item, safeSeason, safeEpisode)
-    }
-
-    private fun fetchServersForSelected(item: TmdbMediaItem, season: Int, episode: Int) {
-        viewModelScope.launch {
-            try {
-                val response = if (item.mediaType.equals("tv", ignoreCase = true)) {
-                    LumiNetwork.api.getTvStream(item.id, season, episode)
-                } else {
-                    LumiNetwork.api.getMovieStream(item.id)
-                }
-                _uiState.value = _uiState.value.copy(
-                    servers = response.servers,
-                    isServersLoading = false
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isServersLoading = false,
-                    serversError = "Could not load streaming servers."
-                )
-            }
-        }
-    }
-
-    fun closeItemDetails() {
-        _uiState.value = _uiState.value.copy(
-            selectedItem = null,
-            servers = emptyList(),
-            isServersLoading = false,
-            serversError = null
-        )
-    }
-
-    // AnimeSalt Item
     fun openAnimeDetails(item: AnimeSaltItem) {
         if (item.type == "episode") {
-            _uiState.value = _uiState.value.copy(
-                selectedAnime = item,
-                animeDetails = null,
-                isAnimeDetailsLoading = false,
-                animeDetailsError = null
-            )
-            loadAnimeEpisodeStreams(item.title, item.url)
+            playEpisodeDirectly(item.title, item.url)
             return
         }
-
         _uiState.value = _uiState.value.copy(
             selectedAnime = item,
             animeDetails = null,
-            isAnimeDetailsLoading = true,
-            animeDetailsError = null,
-            selectedAnimeEpisodeTitle = null,
-            animeServers = emptyList(),
-            animeServersError = null
+            isDetailsLoading = true,
+            detailsError = null
         )
         viewModelScope.launch {
             try {
                 val details = AnimeSaltScraper.fetchDetails(item.url, item.slug)
+                val firstSeason = details.seasons.keys.firstOrNull() ?: 1
                 _uiState.value = _uiState.value.copy(
                     animeDetails = details,
-                    isAnimeDetailsLoading = false
+                    selectedSeason = firstSeason,
+                    isDetailsLoading = false
                 )
-                if (details.episodes.isEmpty()) {
-                    loadAnimeEpisodeStreams(item.title, item.url)
+                if (details.seasons.isEmpty()) {
+                    playEpisodeDirectly(item.title, item.url)
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
-                    isAnimeDetailsLoading = false,
-                    animeDetailsError = "Could not load episodes."
+                    isDetailsLoading = false,
+                    detailsError = "এপিসোড লিস্ট লোড করা যায়নি।"
                 )
             }
         }
     }
 
-    fun loadAnimeEpisodeStreams(epTitle: String, epUrl: String) {
-        _uiState.value = _uiState.value.copy(
-            selectedAnimeEpisodeTitle = epTitle,
-            animeServers = emptyList(),
-            isAnimeServersLoading = true,
-            animeServersError = null
-        )
+    fun selectSeason(season: Int) {
+        _uiState.value = _uiState.value.copy(selectedSeason = season)
+    }
+
+    fun playEpisodeDirectly(epTitle: String, epUrl: String) {
+        _uiState.value = _uiState.value.copy(isLoadingStream = true, detailsError = null)
         viewModelScope.launch {
             try {
-                val streams = AnimeSaltScraper.fetchEpisodeStreams(epUrl)
-                _uiState.value = _uiState.value.copy(
-                    animeServers = streams,
-                    isAnimeServersLoading = false,
-                    animeServersError = if (streams.isEmpty()) "No stream servers found." else null
-                )
+                val servers = AnimeSaltScraper.fetchEpisodeStreams(epUrl)
+                if (servers.isEmpty()) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoadingStream = false,
+                        detailsError = "কোনো ভিডিও সার্ভার পাওয়া যায়নি।"
+                    )
+                } else {
+                    val hindiIdx = servers.indexOfFirst { it.name.contains("Hindi", ignoreCase = true) }
+                    val startIdx = if (hindiIdx >= 0) hindiIdx else 0
+                    _uiState.value = _uiState.value.copy(
+                        isLoadingStream = false,
+                        activeStream = StreamSession(
+                            title = epTitle,
+                            servers = servers,
+                            initialIndex = startIdx
+                        )
+                    )
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
-                    isAnimeServersLoading = false,
-                    animeServersError = "Failed to load episode streams."
+                    isLoadingStream = false,
+                    detailsError = "ভিডিও লিংক লোড করতে সমস্যা হয়েছে।"
                 )
             }
         }
@@ -395,18 +244,8 @@ class LumiViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(
             selectedAnime = null,
             animeDetails = null,
-            isAnimeDetailsLoading = false,
-            animeDetailsError = null,
-            selectedAnimeEpisodeTitle = null,
-            animeServers = emptyList(),
-            isAnimeServersLoading = false,
-            animeServersError = null
-        )
-    }
-
-    fun startStream(title: String, url: String) {
-        _uiState.value = _uiState.value.copy(
-            activeStream = StreamSession(title = title, url = url)
+            isDetailsLoading = false,
+            detailsError = null
         )
     }
 
@@ -423,6 +262,15 @@ class MainActivity : ComponentActivity() {
             LumiPlayRoot()
         }
     }
+}
+
+private fun Context.findActivity(): Activity? {
+    var ctx = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }
 
 @Composable
@@ -456,7 +304,7 @@ fun LumiPlayRoot(lumiViewModel: LumiViewModel = viewModel()) {
     AnimatedContent(
         targetState = state.showWelcome,
         transitionSpec = {
-            fadeIn(animationSpec = tween(420)) togetherWith fadeOut(animationSpec = tween(320))
+            fadeIn(animationSpec = tween(400)) togetherWith fadeOut(animationSpec = tween(300))
         },
         label = "ScreenTransition"
     ) { isWelcome ->
@@ -469,7 +317,7 @@ fun LumiPlayRoot(lumiViewModel: LumiViewModel = viewModel()) {
 
     val streamSession = state.activeStream
     if (streamSession != null) {
-        LumiStreamPlayerDialog(
+        ProAnimePlayerDialog(
             session = streamSession,
             onDismiss = { lumiViewModel.closeStream() }
         )
@@ -522,9 +370,9 @@ fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Liquid Glass Cinema",
+                    text = "Premium Anime Cinema",
                     color = Color(0xFF93C5FD),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
@@ -536,10 +384,10 @@ fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
                         .background(Color(0x3322D3EE))
                         .border(1.dp, Color(0x6622D3EE), RoundedCornerShape(50))
                         .clickable { onContinue() }
-                        .padding(horizontal = 20.dp, vertical = 9.dp)
+                        .padding(horizontal = 24.dp, vertical = 10.dp)
                 ) {
                     Text(
-                        text = "Enter Cinema",
+                        text = "Enter Anime World",
                         color = Color(0xFF67E8F9),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -547,18 +395,13 @@ fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
                 }
             }
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
+            Text(
+                text = "Samir Ahmed",
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(bottom = 12.dp)
-            ) {
-                Text(
-                    text = "Samir Ahmed",
-                    color = Color.White.copy(alpha = 0.92f),
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.5.sp
-                )
-            }
+            )
         }
     }
 }
@@ -577,7 +420,7 @@ fun LumiPlayHomeScreen(
                 Column(
                     modifier = Modifier
                         .statusBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -586,15 +429,18 @@ fun LumiPlayHomeScreen(
                     ) {
                         Column {
                             Text(
-                                text = "LumiPlay",
+                                text = "LumiPlay Anime",
                                 color = Color.White,
-                                fontSize = 26.sp,
+                                fontSize = 24.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (state.activeQuery.isEmpty()) state.selectedCategory.label else "Search: ${state.activeQuery}",
+                                text = if (state.activeQuery.isEmpty())
+                                    "${state.selectedCategory.label} • Hindi & Multi Dub"
+                                else
+                                    "Search: ${state.activeQuery}",
                                 color = Color(0xFF93C5FD),
-                                fontSize = 13.sp
+                                fontSize = 12.sp
                             )
                         }
 
@@ -617,7 +463,7 @@ fun LumiPlayHomeScreen(
                         onValueChange = { lumiViewModel.onQueryChange(it) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(RoundedCornerShape(18.dp))
                             .background(Color.White.copy(alpha = 0.08f))
                             .border(
                                 width = 1.dp,
@@ -627,16 +473,13 @@ fun LumiPlayHomeScreen(
                                         Color.Cyan.copy(alpha = 0.20f)
                                     )
                                 ),
-                                shape = RoundedCornerShape(20.dp)
+                                shape = RoundedCornerShape(18.dp)
                             ),
                         placeholder = {
                             Text(
-                                text = if (state.selectedCategory == MediaCategory.ANIME)
-                                    "Search Hindi/Dub anime..."
-                                else
-                                    "Search movies or TV...",
+                                text = "Search anime (Naruto, Solo Leveling...)",
                                 color = Color.White.copy(alpha = 0.55f),
-                                fontSize = 14.sp
+                                fontSize = 13.sp
                             )
                         },
                         leadingIcon = {
@@ -680,42 +523,39 @@ fun LumiPlayHomeScreen(
                             focusedBorderColor = Color.Transparent,
                             unfocusedBorderColor = Color.Transparent
                         ),
-                        shape = RoundedCornerShape(20.dp)
+                        shape = RoundedCornerShape(18.dp)
                     )
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        MediaCategory.entries.forEach { category ->
-                            val isSelected = state.selectedCategory == category
+                        items(AnimeCategory.entries) { category ->
+                            val isSelected = state.activeQuery.isEmpty() && state.selectedCategory == category
                             Box(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(14.dp))
+                                    .clip(RoundedCornerShape(50))
                                     .background(
-                                        if (isSelected) Color(0x3322D3EE) else Color.White.copy(alpha = 0.06f)
+                                        if (isSelected) Color(0x3322D3EE) else Color.White.copy(alpha = 0.07f)
                                     )
                                     .border(
                                         width = 1.dp,
-                                        color = if (isSelected) Color(0x8822D3EE) else Color.White.copy(alpha = 0.14f),
-                                        shape = RoundedCornerShape(14.dp)
+                                        color = if (isSelected) Color(0x9922D3EE) else Color.White.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(50)
                                     )
                                     .clickable {
                                         lumiViewModel.onQueryChange("")
                                         lumiViewModel.loadCategory(category)
                                     }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
+                                    .padding(horizontal = 14.dp, vertical = 7.dp)
                             ) {
                                 Text(
                                     text = category.label,
-                                    color = if (isSelected) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.78f),
+                                    color = if (isSelected) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.82f),
                                     fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
                             }
                         }
@@ -756,33 +596,9 @@ fun LumiPlayHomeScreen(
                         }
                     }
 
-                    state.selectedCategory == MediaCategory.ANIME -> {
-                        if (state.animeItems.isEmpty()) {
-                            Text(
-                                text = "No anime found.",
-                                color = Color.White.copy(alpha = 0.75f),
-                                modifier = Modifier.align(Alignment.Center)
-                            )
-                        } else {
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(2),
-                                contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                items(state.animeItems) { anime ->
-                                    LiquidAnimeCard(
-                                        item = anime,
-                                        onClick = { lumiViewModel.openAnimeDetails(anime) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    state.items.isEmpty() -> {
+                    state.animeItems.isEmpty() -> {
                         Text(
-                            text = "No results found.",
+                            text = "কোনো অ্যানিমে পাওয়া যায়নি।",
                             color = Color.White.copy(alpha = 0.75f),
                             modifier = Modifier.align(Alignment.Center)
                         )
@@ -795,47 +611,47 @@ fun LumiPlayHomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            items(state.items) { item ->
-                                LiquidMediaCard(
-                                    item = item,
-                                    onClick = { lumiViewModel.openItemDetails(item) }
+                            items(state.animeItems) { anime ->
+                                LiquidAnimeCard(
+                                    item = anime,
+                                    onClick = { lumiViewModel.openAnimeDetails(anime) }
                                 )
                             }
+                        }
+                    }
+                }
+
+                if (state.isLoadingStream) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0x88000000)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = Color(0xFF67E8F9))
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text("ভিডিও সার্ভার লোড হচ্ছে...", color = Color.White, fontSize = 13.sp)
                         }
                     }
                 }
             }
         }
 
-        val selectedItem = state.selectedItem
-        if (selectedItem != null) {
-            MediaDetailsDialog(
-                item = selectedItem,
-                season = state.selectedSeason,
-                episode = state.selectedEpisode,
-                servers = state.servers,
-                isLoading = state.isServersLoading,
-                errorText = state.serversError,
-                onUpdateSeasonEpisode = { s, e -> lumiViewModel.updateSeasonEpisode(s, e) },
-                onDismiss = { lumiViewModel.closeItemDetails() },
-                onStreamLink = { title, url -> lumiViewModel.startStream(title, url) }
-            )
-        }
-
         val selectedAnime = state.selectedAnime
         if (selectedAnime != null) {
-            AnimeSaltDetailsDialog(
+            SeasonEpisodeDialog(
                 item = selectedAnime,
                 details = state.animeDetails,
-                isDetailsLoading = state.isAnimeDetailsLoading,
-                detailsError = state.animeDetailsError,
-                selectedEpisodeTitle = state.selectedAnimeEpisodeTitle,
-                servers = state.animeServers,
-                isServersLoading = state.isAnimeServersLoading,
-                serversError = state.animeServersError,
-                onSelectEpisode = { ep -> lumiViewModel.loadAnimeEpisodeStreams(ep.title, ep.url) },
-                onDismiss = { lumiViewModel.closeAnimeDetails() },
-                onStreamLink = { title, url -> lumiViewModel.startStream(title, url) }
+                selectedSeason = state.selectedSeason,
+                isLoading = state.isDetailsLoading,
+                errorText = state.detailsError,
+                onSelectSeason = { lumiViewModel.selectSeason(it) },
+                onPlayEpisode = { ep ->
+                    val fullTitle = "${selectedAnime.title} • S${ep.season} E${ep.episode}"
+                    lumiViewModel.playEpisodeDirectly(fullTitle, ep.url)
+                },
+                onDismiss = { lumiViewModel.closeAnimeDetails() }
             )
         }
     }
@@ -862,8 +678,8 @@ fun LiquidAnimeCard(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.30f),
-                        Color.Cyan.copy(alpha = 0.10f)
+                        Color.White.copy(alpha = 0.28f),
+                        Color.Cyan.copy(alpha = 0.12f)
                     )
                 ),
                 shape = RoundedCornerShape(20.dp)
@@ -894,6 +710,22 @@ fun LiquidAnimeCard(
                     modifier = Modifier.size(36.dp)
                 )
             }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xCC070913))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = item.type.uppercase(),
+                    color = Color(0xFF67E8F9),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -905,48 +737,22 @@ fun LiquidAnimeCard(
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
-
-        Text(
-            text = item.type.uppercase(),
-            color = Color(0xFF67E8F9),
-            fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
         )
     }
 }
 
 @Composable
-fun AnimeSaltDetailsDialog(
+fun SeasonEpisodeDialog(
     item: AnimeSaltItem,
     details: AnimeSaltDetails?,
-    isDetailsLoading: Boolean,
-    detailsError: String?,
-    selectedEpisodeTitle: String?,
-    servers: List<AnimeSaltServer>,
-    isServersLoading: Boolean,
-    serversError: String?,
-    onSelectEpisode: (AnimeSaltEpisode) -> Unit,
-    onDismiss: () -> Unit,
-    onStreamLink: (String, String) -> Unit
+    selectedSeason: Int,
+    isLoading: Boolean,
+    errorText: String?,
+    onSelectSeason: (Int) -> Unit,
+    onPlayEpisode: (AnimeSaltEpisode) -> Unit,
+    onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-
-    fun copyToClipboard(label: String, text: String) {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
-        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
-    }
-
-    fun openExternalBrowser(rawUrl: String) {
-        try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl))
-            context.startActivity(intent)
-        } catch (_: Exception) {
-        }
-    }
-
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -978,8 +784,8 @@ fun AnimeSaltDetailsDialog(
                         contentDescription = item.title,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .width(60.dp)
-                            .height(86.dp)
+                            .width(64.dp)
+                            .height(92.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
                     )
@@ -997,300 +803,7 @@ fun AnimeSaltDetailsDialog(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = selectedEpisodeTitle ?: "AnimeSalt • Hindi / Multi Audio",
-                        color = Color(0xFF67E8F9),
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close",
-                        tint = Color.White.copy(alpha = 0.8f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (isDetailsLoading || isServersLoading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Color(0xFF67E8F9))
-                }
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f, fill = false)
-                ) {
-                    if (servers.isNotEmpty()) {
-                        item {
-                            Text(
-                                text = "Select Server / Audio",
-                                color = Color(0xFF93C5FD),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        items(servers) { server ->
-                            val label = "${selectedEpisodeTitle ?: item.title} • ${server.name}"
-                            ServerActionCard(
-                                title = server.name,
-                                onStream = { onStreamLink(label, server.url) },
-                                onCopy = { copyToClipboard(server.name, server.url) },
-                                onBrowser = { openExternalBrowser(server.url) }
-                            )
-                        }
-                    } else if (serversError != null) {
-                        item {
-                            Text(
-                                text = serversError,
-                                color = Color(0xFFFCA5A5),
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-
-                    val episodes = details?.episodes.orEmpty()
-                    if (episodes.isNotEmpty()) {
-                        item {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Episodes (${episodes.size})",
-                                color = Color(0xFF93C5FD),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        items(episodes) { ep ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color.White.copy(alpha = 0.08f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(14.dp))
-                                    .clickable { onSelectEpisode(ep) }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = ep.title,
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Icon(
-                                    imageVector = Icons.Rounded.PlayArrow,
-                                    contentDescription = null,
-                                    tint = Color(0xFF67E8F9),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    } else if (detailsError != null) {
-                        item {
-                            Text(
-                                text = detailsError,
-                                color = Color(0xFFFCA5A5),
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun LiquidMediaCard(
-    item: TmdbMediaItem,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.13f),
-                        Color.White.copy(alpha = 0.04f)
-                    )
-                )
-            )
-            .border(
-                width = 1.dp,
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.30f),
-                        Color.Cyan.copy(alpha = 0.10f)
-                    )
-                ),
-                shape = RoundedCornerShape(20.dp)
-            )
-            .clickable { onClick() }
-            .padding(8.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.68f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.05f)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (!item.poster.isNullOrBlank()) {
-                AsyncImage(
-                    model = item.poster,
-                    contentDescription = item.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.Movie,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.4f),
-                    modifier = Modifier.size(36.dp)
-                )
-            }
-
-            if (item.rating > 0.0) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xBB070913))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "★ ${item.rating}",
-                        color = Color(0xFFFDE68A),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = item.title.ifBlank { "Untitled" },
-            color = Color.White,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
-
-        if (item.year.isNotBlank()) {
-            Text(
-                text = "${item.year} • ${item.mediaType.uppercase()}",
-                color = Color(0xFF93C5FD),
-                fontSize = 11.sp,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun MediaDetailsDialog(
-    item: TmdbMediaItem,
-    season: Int,
-    episode: Int,
-    servers: List<StreamServer>,
-    isLoading: Boolean,
-    errorText: String?,
-    onUpdateSeasonEpisode: (Int, Int) -> Unit,
-    onDismiss: () -> Unit,
-    onStreamLink: (String, String) -> Unit
-) {
-    val context = LocalContext.current
-
-    fun copyToClipboard(label: String, text: String) {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
-        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
-    }
-
-    fun openExternalBrowser(rawUrl: String) {
-        try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl))
-            context.startActivity(intent)
-        } catch (_: Exception) {
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 650.dp)
-                .clip(RoundedCornerShape(26.dp))
-                .background(Color(0xFF0C1222))
-                .border(
-                    width = 1.dp,
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.34f),
-                            Color.Cyan.copy(alpha = 0.22f)
-                        )
-                    ),
-                    shape = RoundedCornerShape(26.dp)
-                )
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                if (!item.poster.isNullOrBlank()) {
-                    AsyncImage(
-                        model = item.poster,
-                        contentDescription = item.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .width(64.dp)
-                            .height(92.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.title.ifBlank { "Details" },
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = listOfNotNull(
-                            item.year.takeIf { it.isNotBlank() },
-                            if (item.rating > 0) "★ ${item.rating}" else null,
-                            item.mediaType.uppercase()
-                        ).joinToString(" • "),
+                        text = "Hindi / Multi Audio",
                         color = Color(0xFF67E8F9),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -1306,43 +819,15 @@ fun MediaDetailsDialog(
                 }
             }
 
-            if (item.overview.isNotBlank()) {
+            if (!details?.overview.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = item.overview,
-                    color = Color.White.copy(alpha = 0.72f),
+                    text = details!!.overview,
+                    color = Color.White.copy(alpha = 0.7f),
                     fontSize = 12.sp,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-
-            if (item.mediaType.equals("tv", ignoreCase = true)) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("S$season", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        SmallStepperButton("-") { onUpdateSeasonEpisode(season - 1, episode) }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        SmallStepperButton("+") { onUpdateSeasonEpisode(season + 1, episode) }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("E$episode", color = Color(0xFF67E8F9), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        SmallStepperButton("-") { onUpdateSeasonEpisode(season, episode - 1) }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        SmallStepperButton("+") { onUpdateSeasonEpisode(season, episode + 1) }
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1351,37 +836,83 @@ fun MediaDetailsDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp),
+                        .height(160.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(color = Color(0xFF67E8F9))
                 }
             } else {
                 if (errorText != null) {
-                    Text(
-                        text = errorText,
-                        color = Color(0xFFFCA5A5),
-                        fontSize = 13.sp
-                    )
+                    Text(text = errorText, color = Color(0xFFFCA5A5), fontSize = 13.sp)
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f, fill = false)
-                ) {
-                    items(servers) { server ->
-                        val label = if (item.mediaType.equals("tv", ignoreCase = true)) {
-                            "${item.title} (S${season}E${episode}) • ${server.name}"
-                        } else {
-                            "${item.title} • ${server.name}"
+                val seasonsMap = details?.seasons.orEmpty()
+                if (seasonsMap.isNotEmpty()) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(seasonsMap.keys.toList()) { seasonNum ->
+                            val active = seasonNum == selectedSeason
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (active) Color(0x3322D3EE) else Color.White.copy(alpha = 0.08f))
+                                    .border(
+                                        1.dp,
+                                        if (active) Color(0x9922D3EE) else Color.White.copy(alpha = 0.15f),
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { onSelectSeason(seasonNum) }
+                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                            ) {
+                                Text(
+                                    text = "Season $seasonNum",
+                                    color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.8f),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
-                        ServerActionCard(
-                            title = server.name,
-                            onStream = { onStreamLink(label, server.url) },
-                            onCopy = { copyToClipboard(server.name, server.url) },
-                            onBrowser = { openExternalBrowser(server.url) }
-                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val currentEpisodes = seasonsMap[selectedSeason].orEmpty()
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        items(currentEpisodes) { ep ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White.copy(alpha = 0.08f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
+                                    .clickable { onPlayEpisode(ep) }
+                                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color(0xFF67E8F9),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "EP ${ep.episode}",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1389,135 +920,56 @@ fun MediaDetailsDialog(
     }
 }
 
-@Composable
-fun SmallStepperButton(symbol: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(28.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(alpha = 0.12f))
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = symbol,
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-@Composable
-fun ServerActionCard(
-    title: String,
-    onStream: () -> Unit,
-    onCopy: () -> Unit,
-    onBrowser: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
-            .padding(12.dp)
-    ) {
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x3322D3EE))
-                    .border(1.dp, Color(0x6622D3EE), RoundedCornerShape(12.dp))
-                    .clickable { onStream() }
-                    .padding(vertical = 8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.PlayArrow,
-                    contentDescription = null,
-                    tint = Color(0xFF67E8F9),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Play Now",
-                    color = Color(0xFF67E8F9),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            IconButton(
-                onClick = onCopy,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.08f))
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ContentCopy,
-                    contentDescription = "Copy Link",
-                    tint = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(17.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onBrowser,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.08f))
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.OpenInBrowser,
-                    contentDescription = "Open in Browser",
-                    tint = Color(0xFF93C5FD),
-                    modifier = Modifier.size(17.dp)
-                )
-            }
-        }
-    }
-}
-
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun LumiStreamPlayerDialog(
+fun ProAnimePlayerDialog(
     session: StreamSession,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-
-    fun looksLikeDirectVideo(raw: String?): Boolean {
-        val u = raw?.lowercase().orEmpty()
-        return u.endsWith(".mp4") ||
-            u.endsWith(".m3u8") ||
-            u.endsWith(".mkv") ||
-            u.endsWith(".webm") ||
-            u.contains(".mp4?") ||
-            u.contains(".m3u8?")
+    val activity = remember(context) { context.findActivity() }
+    val audioManager = remember(context) {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
 
-    var currentStreamUrl by remember(session.url) { mutableStateOf(session.url) }
-    var useExoPlayer by remember(session.url) { mutableStateOf(looksLikeDirectVideo(session.url)) }
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var selectedServerIdx by remember(session) { mutableIntStateOf(session.initialIndex) }
+    val currentServer = session.servers.getOrNull(selectedServerIdx) ?: session.servers.first()
+
+    var directVideoUrl by remember(currentServer.url) { mutableStateOf<String?>(null) }
+    var useExoPlayer by remember(currentServer.url) { mutableStateOf(false) }
+    var isLandscape by remember { mutableStateOf(false) }
+    var showControlsPanel by remember { mutableStateOf(false) }
+    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
+
+    val maxVol = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
+    var volumeLevel by remember {
+        mutableFloatStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / maxVol.toFloat())
+    }
+    var brightnessLevel by remember {
+        mutableFloatStateOf(
+            activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    fun toggleOrientation() {
+        isLandscape = !isLandscape
+        activity?.requestedOrientation = if (isLandscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    fun looksLikeDirectStream(raw: String?): Boolean {
+        val u = raw?.lowercase().orEmpty()
+        return u.contains(".m3u8") || u.contains(".mp4")
+    }
 
     val blockedKeywords = remember {
         listOf(
@@ -1527,16 +979,22 @@ fun LumiStreamPlayerDialog(
         )
     }
 
-    val exoPlayer = remember(currentStreamUrl, useExoPlayer) {
-        if (useExoPlayer) {
+    val exoPlayer = remember(directVideoUrl, useExoPlayer) {
+        val target = directVideoUrl
+        if (useExoPlayer && !target.isNullOrBlank()) {
             ExoPlayer.Builder(context).build().apply {
-                setMediaItem(MediaItem.fromUri(currentStreamUrl))
+                setMediaItem(MediaItem.fromUri(target))
+                playbackParameters = PlaybackParameters(playbackSpeed)
                 prepare()
                 playWhenReady = true
             }
         } else {
             null
         }
+    }
+
+    LaunchedEffect(playbackSpeed, exoPlayer) {
+        exoPlayer?.playbackParameters = PlaybackParameters(playbackSpeed)
     }
 
     DisposableEffect(exoPlayer) {
@@ -1556,63 +1014,180 @@ fun LumiStreamPlayerDialog(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
+            // Top Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0xFF0E1426))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
                     Text(
                         text = session.title,
                         color = Color.White,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (useExoPlayer) "Direct Video Player" else "LumiPlay Web Player",
+                        text = "${currentServer.name} • ${if (useExoPlayer) "Native HD Player" else "In-App Stream"}",
                         color = Color(0xFF67E8F9),
                         fontSize = 11.sp
                     )
                 }
 
-                if (useExoPlayer) {
-                    TextButton(onClick = { useExoPlayer = false }) {
-                        Text("Web", color = Color(0xFF93C5FD), fontSize = 12.sp)
-                    }
-                } else {
-                    TextButton(
-                        onClick = {
-                            if (webViewRef?.canGoBack() == true) {
-                                webViewRef?.goBack()
-                            }
-                        }
-                    ) {
-                        Text("Back", color = Color(0xFF67E8F9), fontSize = 12.sp)
-                    }
+                IconButton(onClick = { showControlsPanel = !showControlsPanel }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Brightness6,
+                        contentDescription = "Controls",
+                        tint = if (showControlsPanel) Color(0xFF67E8F9) else Color.White
+                    )
+                }
+
+                IconButton(onClick = { toggleOrientation() }) {
+                    Icon(
+                        imageVector = Icons.Rounded.ScreenRotation,
+                        contentDescription = "Rotate",
+                        tint = Color.White
+                    )
                 }
 
                 IconButton(onClick = onDismiss) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close Stream",
+                        contentDescription = "Close",
                         tint = Color.White
                     )
                 }
             }
 
-            if (useExoPlayer && exoPlayer != null) {
-                Box(
+            // In-Player Dub / Server Switcher Bar
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0A0F1E))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(session.servers.indices.toList()) { idx ->
+                    val srv = session.servers[idx]
+                    val active = idx == selectedServerIdx
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (active) Color(0x3322D3EE) else Color.White.copy(alpha = 0.08f))
+                            .border(
+                                1.dp,
+                                if (active) Color(0x9922D3EE) else Color.White.copy(alpha = 0.16f),
+                                RoundedCornerShape(50)
+                            )
+                            .clickable {
+                                selectedServerIdx = idx
+                                directVideoUrl = null
+                                useExoPlayer = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = srv.name,
+                            color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.85f),
+                            fontSize = 11.sp,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            // Brightness, Volume & Speed Control Panel
+            if (showControlsPanel) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
+                        .background(Color(0xFF11182C))
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Brightness6,
+                            contentDescription = null,
+                            tint = Color(0xFFFDE68A),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Slider(
+                            value = brightnessLevel,
+                            onValueChange = { v ->
+                                brightnessLevel = v
+                                activity?.window?.let { win ->
+                                    val lp = win.attributes
+                                    lp.screenBrightness = v.coerceIn(0.05f, 1f)
+                                    win.attributes = lp
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.VolumeUp,
+                            contentDescription = null,
+                            tint = Color(0xFF67E8F9),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Slider(
+                            value = volumeLevel,
+                            onValueChange = { v ->
+                                volumeLevel = v
+                                val targetVol = (v * maxVol).toInt().coerceIn(0, maxVol)
+                                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    if (useExoPlayer) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Speed,
+                                contentDescription = null,
+                                tint = Color(0xFF93C5FD),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { spd ->
+                                val active = playbackSpeed == spd
+                                Text(
+                                    text = "${spd}x",
+                                    color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.75f),
+                                    fontSize = 12.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (active) Color(0x3322D3EE) else Color.Transparent)
+                                        .clickable { playbackSpeed = spd }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Video Player Area
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color.Black)
+            ) {
+                if (useExoPlayer && exoPlayer != null) {
                     AndroidView(
                         factory = { ctx ->
                             PlayerView(ctx).apply {
@@ -1623,38 +1198,52 @@ fun LumiStreamPlayerDialog(
                         },
                         modifier = Modifier.fillMaxSize()
                     )
-                }
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            webViewRef = this
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.setSupportMultipleWindows(false)
-                            settings.javaScriptCanOpenWindowsAutomatically = false
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            webChromeClient = WebChromeClient()
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(
-                                    view: WebView?,
-                                    request: WebResourceRequest?
-                                ): Boolean {
-                                    val rawUrl = request?.url?.toString().orEmpty()
-                                    val lower = rawUrl.lowercase()
-                                    if (blockedKeywords.any { key -> lower.contains(key) }) {
-                                        Toast.makeText(ctx, "Ad redirect blocked", Toast.LENGTH_SHORT).show()
-                                        return true
+                } else {
+                    key(currentServer.url) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.setSupportMultipleWindows(false)
+                                    settings.javaScriptCanOpenWindowsAutomatically = false
+                                    settings.mediaPlaybackRequiresUserGesture = false
+                                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    settings.userAgentString =
+                                        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                                    webChromeClient = WebChromeClient()
+                                    webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(
+                                            view: WebView?,
+                                            request: WebResourceRequest?
+                                        ): Boolean {
+                                            val rawUrl = request?.url?.toString().orEmpty()
+                                            val lower = rawUrl.lowercase()
+                                            if (blockedKeywords.any { key -> lower.contains(key) }) {
+                                                Toast.makeText(ctx, "Ad blocked", Toast.LENGTH_SHORT).show()
+                                                return true
+                                            }
+                                            return false
+                                        }
+
+                                        override fun onLoadResource(view: WebView?, url: String?) {
+                                            super.onLoadResource(view, url)
+                                            if (!useExoPlayer && looksLikeDirectStream(url) && url != null) {
+                                                directVideoUrl = url
+                                                useExoPlayer = true
+                                            }
+                                        }
                                     }
-                                    return false
+                                    loadUrl(
+                                        currentServer.url,
+                                        mapOf("Referer" to "${AnimeSaltScraper.BASE_URL}/")
+                                    )
                                 }
-                            }
-                            loadUrl(session.url)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
             }
         }
     }

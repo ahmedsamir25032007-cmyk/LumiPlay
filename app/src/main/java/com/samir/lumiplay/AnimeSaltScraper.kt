@@ -18,6 +18,8 @@ data class AnimeSaltItem(
 )
 
 data class AnimeSaltEpisode(
+    val season: Int,
+    val episode: Int,
     val title: String,
     val slug: String,
     val url: String
@@ -28,7 +30,7 @@ data class AnimeSaltDetails(
     val title: String,
     val poster: String,
     val overview: String,
-    val episodes: List<AnimeSaltEpisode>
+    val seasons: Map<Int, List<AnimeSaltEpisode>>
 )
 
 data class AnimeSaltServer(
@@ -37,8 +39,18 @@ data class AnimeSaltServer(
     val url: String
 )
 
+enum class AnimeCategory(val label: String, val path: String) {
+    HOME("Home", "/"),
+    ONGOING("Ongoing", "/category/status/ongoing/"),
+    SERIES("Series", "/category/type/anime/?type=series"),
+    MOVIES("Movies", "/category/type/anime/?type=movies"),
+    CRUNCHYROLL("Crunchyroll", "/category/network/crunchyroll/"),
+    NETFLIX("Netflix", "/category/network/netflix/"),
+    CARTOON("Cartoon", "/category/type/cartoon/?type=series")
+}
+
 object AnimeSaltScraper {
-    private const val BASE_URL = "https://animesalt.cx"
+    const val BASE_URL = "https://animesalt.cx"
     private const val USER_AGENT =
         "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
@@ -93,13 +105,28 @@ object AnimeSaltScraper {
         return items
     }
 
-    suspend fun fetchHome(): List<AnimeSaltItem> = withContext(Dispatchers.IO) {
-        parseCards(getDoc(BASE_URL))
-    }
+    suspend fun fetchCategory(category: AnimeCategory): List<AnimeSaltItem> =
+        withContext(Dispatchers.IO) {
+            parseCards(getDoc("$BASE_URL${category.path}"))
+        }
 
     suspend fun search(query: String): List<AnimeSaltItem> = withContext(Dispatchers.IO) {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
         parseCards(getDoc("$BASE_URL/?s=$encoded"))
+    }
+
+    private fun parseSeasonEpisode(slug: String, rawText: String): Pair<Int, Int> {
+        val sxeRegex = Regex("(\\d+)[xX](\\d+)")
+        sxeRegex.find(slug)?.let {
+            return (it.groupValues[1].toIntOrNull() ?: 1) to (it.groupValues[2].toIntOrNull() ?: 1)
+        }
+        val seRegex = Regex("[sS](\\d+)\\s*[eE](\\d+)")
+        seRegex.find(rawText)?.let {
+            return (it.groupValues[1].toIntOrNull() ?: 1) to (it.groupValues[2].toIntOrNull() ?: 1)
+        }
+        val numRegex = Regex("(\\d+)$")
+        val ep = numRegex.find(slug)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        return 1 to ep
     }
 
     suspend fun fetchDetails(itemUrl: String, fallbackSlug: String): AnimeSaltDetails =
@@ -112,22 +139,36 @@ object AnimeSaltScraper {
                 ?: imgEl?.attr("src").orEmpty()
             if (poster.startsWith("//")) poster = "https:$poster"
 
-            val episodes = mutableListOf<AnimeSaltEpisode>()
-            val seenEp = mutableSetOf<String>()
+            val epMap = linkedMapOf<Pair<Int, Int>, AnimeSaltEpisode>()
             for (el in doc.select("a[href*='/episode/']")) {
                 val epUrl = el.absUrl("href").ifBlank { el.attr("href") }
-                if (epUrl.isBlank() || !seenEp.add(epUrl)) continue
+                if (epUrl.isBlank()) continue
                 val epSlug = extractSlug(epUrl)
-                val epTitle = el.text().trim().replace(Regex("\\s+"), " ").ifBlank { epSlug }
-                episodes.add(AnimeSaltEpisode(title = epTitle, slug = epSlug, url = epUrl))
+                val rawText = el.text().trim().replace(Regex("\\s+"), " ")
+                val (season, episode) = parseSeasonEpisode(epSlug, rawText)
+                val key = season to episode
+                if (!epMap.containsKey(key)) {
+                    epMap[key] = AnimeSaltEpisode(
+                        season = season,
+                        episode = episode,
+                        title = "Episode $episode",
+                        slug = epSlug,
+                        url = epUrl
+                    )
+                }
             }
+
+            val grouped = epMap.values
+                .sortedWith(compareBy<AnimeSaltEpisode> { it.season }.thenBy { it.episode })
+                .groupBy { it.season }
+                .toSortedMap()
 
             AnimeSaltDetails(
                 slug = fallbackSlug,
                 title = title,
                 poster = poster,
                 overview = overview,
-                episodes = episodes
+                seasons = grouped
             )
         }
 
@@ -155,7 +196,7 @@ object AnimeSaltScraper {
                                 if (link.isNotBlank()) {
                                     servers.add(
                                         AnimeSaltServer(
-                                            name = "Abyss ($lang)",
+                                            name = lang,
                                             language = lang,
                                             url = link
                                         )
@@ -169,7 +210,7 @@ object AnimeSaltScraper {
                 }
 
                 val name = when {
-                    rawUrl.contains("ravok", ignoreCase = true) -> "Ravok (Multi/Auto)"
+                    rawUrl.contains("ravok", ignoreCase = true) -> "Ravok (Multi)"
                     rawUrl.contains("cybervynx", ignoreCase = true) -> "Cybervynx"
                     else -> "Server ${idx + 1}"
                 }
