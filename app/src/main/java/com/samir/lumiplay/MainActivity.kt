@@ -317,13 +317,8 @@ fun LumiPlayRoot(lumiViewModel: LumiViewModel = viewModel()) {
 
     val streamSession = state.activeStream
     if (streamSession != null) {
-        ProAnimePlayerDialog(
-            session = streamSession,
-            onDismiss = { lumiViewModel.closeStream() }
-        )
-    }
-}
-
+    androidx.activity.compose.BackHandler { onDismiss() }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
 @Composable
 fun LumiPlayWelcomeScreen(onContinue: () -> Unit) {
     LiquidBackground {
