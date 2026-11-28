@@ -1234,9 +1234,27 @@ fun ProAnimePlayerDialog(
                                             }
                                         }
                                     }
-                                    loadUrl(
-                                        currentServer.url,
-                                        mapOf("Referer" to "${AnimeSaltScraper.BASE_URL}/")
+                                    val iframeHtml = """
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                          <style>
+                                            html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+                                            iframe { border: 0; width: 100%; height: 100%; }
+                                          </style>
+                                        </head>
+                                        <body>
+                                          <iframe src="${currentServer.url}" allowfullscreen allow="autoplay; fullscreen; encrypted-media" referrerpolicy="origin"></iframe>
+                                        </body>
+                                        </html>
+                                    """.trimIndent()
+                                    loadDataWithBaseURL(
+                                        "${AnimeSaltScraper.BASE_URL}/",
+                                        iframeHtml,
+                                        "text/html",
+                                        "UTF-8",
+                                        null
                                     )
                                 }
                             },

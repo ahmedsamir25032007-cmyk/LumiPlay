@@ -5,6 +5,7 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.jsoup.Connection
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URLEncoder
@@ -62,6 +63,24 @@ object AnimeSaltScraper {
             .get()
     }
 
+    private fun fetchSeasonAjax(postId: String, seasonNum: Int, refererUrl: String): Document? {
+        return try {
+            Jsoup.connect("$BASE_URL/wp-admin/admin-ajax.php")
+                .userAgent(USER_AGENT)
+                .referrer(refererUrl)
+                .header("X-Requested-With", "XMLHttpRequest")
+                .data("action", "action_select_season")
+                .data("season", seasonNum.toString())
+                .data("post", postId)
+                .method(Connection.Method.POST)
+                .ignoreContentType(true)
+                .timeout(15000)
+                .post()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun extractSlug(url: String): String {
         return url.trimEnd('/').substringAfterLast('/', "")
     }
@@ -115,18 +134,46 @@ object AnimeSaltScraper {
         parseCards(getDoc("$BASE_URL/?s=$encoded"))
     }
 
-    private fun parseSeasonEpisode(slug: String, rawText: String): Pair<Int, Int> {
+    private fun parseSeasonEpisode(slug: String, rawText: String, forcedSeason: Int? = null): Pair<Int, Int> {
         val sxeRegex = Regex("(\\d+)[xX](\\d+)")
         sxeRegex.find(slug)?.let {
-            return (it.groupValues[1].toIntOrNull() ?: 1) to (it.groupValues[2].toIntOrNull() ?: 1)
+            val s = forcedSeason ?: (it.groupValues[1].toIntOrNull() ?: 1)
+            val e = it.groupValues[2].toIntOrNull() ?: 1
+            return s to e
         }
         val seRegex = Regex("[sS](\\d+)\\s*[eE](\\d+)")
         seRegex.find(rawText)?.let {
-            return (it.groupValues[1].toIntOrNull() ?: 1) to (it.groupValues[2].toIntOrNull() ?: 1)
+            val s = forcedSeason ?: (it.groupValues[1].toIntOrNull() ?: 1)
+            val e = it.groupValues[2].toIntOrNull() ?: 1
+            return s to e
         }
         val numRegex = Regex("(\\d+)$")
         val ep = numRegex.find(slug)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-        return 1 to ep
+        return (forcedSeason ?: 1) to ep
+    }
+
+    private fun collectEpisodesFromDoc(
+        doc: Document,
+        epMap: MutableMap<Pair<Int, Int>, AnimeSaltEpisode>,
+        forcedSeason: Int? = null
+    ) {
+        for (el in doc.select("a[href*='/episode/']")) {
+            val epUrl = el.absUrl("href").ifBlank { el.attr("href") }
+            if (epUrl.isBlank()) continue
+            val epSlug = extractSlug(epUrl)
+            val rawText = el.text().trim().replace(Regex("\\s+"), " ")
+            val (season, episode) = parseSeasonEpisode(epSlug, rawText, forcedSeason)
+            val key = season to episode
+            if (!epMap.containsKey(key)) {
+                epMap[key] = AnimeSaltEpisode(
+                    season = season,
+                    episode = episode,
+                    title = "Episode $episode",
+                    slug = epSlug,
+                    url = epUrl
+                )
+            }
+        }
     }
 
     suspend fun fetchDetails(itemUrl: String, fallbackSlug: String): AnimeSaltDetails =
@@ -140,22 +187,22 @@ object AnimeSaltScraper {
             if (poster.startsWith("//")) poster = "https:$poster"
 
             val epMap = linkedMapOf<Pair<Int, Int>, AnimeSaltEpisode>()
-            for (el in doc.select("a[href*='/episode/']")) {
-                val epUrl = el.absUrl("href").ifBlank { el.attr("href") }
-                if (epUrl.isBlank()) continue
-                val epSlug = extractSlug(epUrl)
-                val rawText = el.text().trim().replace(Regex("\\s+"), " ")
-                val (season, episode) = parseSeasonEpisode(epSlug, rawText)
-                val key = season to episode
-                if (!epMap.containsKey(key)) {
-                    epMap[key] = AnimeSaltEpisode(
-                        season = season,
-                        episode = episode,
-                        title = "Episode $episode",
-                        slug = epSlug,
-                        url = epUrl
-                    )
+            val seasonBtns = doc.select(".season-btn[data-post][data-season]")
+
+            if (seasonBtns.isNotEmpty()) {
+                for (btn in seasonBtns) {
+                    val postId = btn.attr("data-post").trim()
+                    val seasonNum = btn.attr("data-season").trim().toIntOrNull() ?: continue
+                    if (postId.isBlank()) continue
+                    val ajaxDoc = fetchSeasonAjax(postId, seasonNum, itemUrl)
+                    if (ajaxDoc != null) {
+                        collectEpisodesFromDoc(ajaxDoc, epMap, forcedSeason = seasonNum)
+                    }
                 }
+            }
+
+            if (epMap.isEmpty()) {
+                collectEpisodesFromDoc(doc, epMap)
             }
 
             val grouped = epMap.values
