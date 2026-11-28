@@ -1203,6 +1203,10 @@ fun ProAnimePlayerDialog(
                         AndroidView(
                             factory = { ctx ->
                                 WebView(ctx).apply {
+                                    layoutParams = android.view.ViewGroup.LayoutParams(
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
                                     settings.javaScriptEnabled = true
                                     settings.domStorageEnabled = true
                                     settings.setSupportMultipleWindows(false)
@@ -1241,7 +1245,7 @@ fun ProAnimePlayerDialog(
                                           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                                           <style>
                                             html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
-                                            iframe { border: 0; width: 100%; height: 100%; }
+                                            iframe { position: fixed; top: 0; left: 0; border: 0; width: 100vw; height: 100vh; }
                                           </style>
                                         </head>
                                         <body>
