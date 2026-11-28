@@ -11,7 +11,8 @@
         android:label="LumiPlay"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:hardwareAccelerated="true">
+        android:hardwareAccelerated="true"
+        android:theme="@style/Theme.LumiPlay">
 
         <activity
             android:name=".MainActivity"
