@@ -935,11 +935,9 @@ fun ProAnimePlayerDialog(
     var selectedServerIdx by remember(session) { mutableIntStateOf(session.initialIndex) }
     val currentServer = session.servers.getOrNull(selectedServerIdx) ?: session.servers.first()
 
-    var directVideoUrl by remember(currentServer.url) { mutableStateOf<String?>(null) }
-    var useExoPlayer by remember(currentServer.url) { mutableStateOf(false) }
     var isLandscape by remember { mutableStateOf(false) }
+    var showTopUi by remember { mutableStateOf(true) }
     var showControlsPanel by remember { mutableStateOf(false) }
-    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
 
     val maxVol = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
     var volumeLevel by remember {
@@ -951,254 +949,199 @@ fun ProAnimePlayerDialog(
         )
     }
 
+    fun setSystemBarsVisible(visible: Boolean) {
+        val window = activity?.window ?: return
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior =
+            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (visible) {
+            controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
+            setSystemBarsVisible(true)
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
     fun toggleOrientation() {
         isLandscape = !isLandscape
-        activity?.requestedOrientation = if (isLandscape) {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        if (isLandscape) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            setSystemBarsVisible(false)
+            showTopUi = false
+            showControlsPanel = false
         } else {
-            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
-
-    fun looksLikeDirectStream(raw: String?): Boolean {
-        val u = raw?.lowercase().orEmpty()
-        return u.contains(".m3u8") || u.contains(".mp4")
-    }
-
-    val blockedKeywords = remember {
-        listOf(
-            "casino", "bet", "poker", "slot", "adsterra", "propeller",
-            "exoclick", "juicyads", "popads", "hilltopads", "clickadu",
-            "doubleclick", "googlesyndication", "redirect"
-        )
-    }
-
-    val exoPlayer = remember(directVideoUrl, useExoPlayer) {
-        val target = directVideoUrl
-        if (useExoPlayer && !target.isNullOrBlank()) {
-            ExoPlayer.Builder(context).build().apply {
-                setMediaItem(MediaItem.fromUri(target))
-                playbackParameters = PlaybackParameters(playbackSpeed)
-                prepare()
-                playWhenReady = true
-            }
-        } else {
-            null
-        }
-    }
-
-    LaunchedEffect(playbackSpeed, exoPlayer) {
-        exoPlayer?.playbackParameters = PlaybackParameters(playbackSpeed)
-    }
-
-    DisposableEffect(exoPlayer) {
-        onDispose {
-            exoPlayer?.release()
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            setSystemBarsVisible(true)
+            showTopUi = true
         }
     }
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF05070E))
-                .statusBarsPadding()
-                .navigationBarsPadding()
+                .background(Color.Black)
         ) {
-            // Top Bar
-            Row(
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF0E1426))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .fillMaxSize()
+                    .then(if (!isLandscape) Modifier.statusBarsPadding().navigationBarsPadding() else Modifier)
             ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
-                    Text(
-                        text = session.title,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "${currentServer.name} • ${if (useExoPlayer) "Native HD Player" else "In-App Stream"}",
-                        color = Color(0xFF67E8F9),
-                        fontSize = 11.sp
-                    )
-                }
-
-                IconButton(onClick = { showControlsPanel = !showControlsPanel }) {
-                    Icon(
-                        imageVector = Icons.Rounded.Brightness6,
-                        contentDescription = "Controls",
-                        tint = if (showControlsPanel) Color(0xFF67E8F9) else Color.White
-                    )
-                }
-
-                IconButton(onClick = { toggleOrientation() }) {
-                    Icon(
-                        imageVector = Icons.Rounded.ScreenRotation,
-                        contentDescription = "Rotate",
-                        tint = Color.White
-                    )
-                }
-
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close",
-                        tint = Color.White
-                    )
-                }
-            }
-
-            // In-Player Dub / Server Switcher Bar
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF0A0F1E))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(session.servers.indices.toList()) { idx ->
-                    val srv = session.servers[idx]
-                    val active = idx == selectedServerIdx
-                    Box(
+                if (showTopUi) {
+                    // Top Bar
+                    Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(if (active) Color(0x3322D3EE) else Color.White.copy(alpha = 0.08f))
-                            .border(
-                                1.dp,
-                                if (active) Color(0x9922D3EE) else Color.White.copy(alpha = 0.16f),
-                                RoundedCornerShape(50)
-                            )
-                            .clickable {
-                                selectedServerIdx = idx
-                                directVideoUrl = null
-                                useExoPlayer = false
-                            }
-                            .padding(horizontal = 12.dp, vertical = 5.dp)
+                            .fillMaxWidth()
+                            .background(Color(0xE60E1426))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = srv.name,
-                            color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.85f),
-                            fontSize = 11.sp,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            // Brightness, Volume & Speed Control Panel
-            if (showControlsPanel) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF11182C))
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Rounded.Brightness6,
-                            contentDescription = null,
-                            tint = Color(0xFFFDE68A),
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Slider(
-                            value = brightnessLevel,
-                            onValueChange = { v ->
-                                brightnessLevel = v
-                                activity?.window?.let { win ->
-                                    val lp = win.attributes
-                                    lp.screenBrightness = v.coerceIn(0.05f, 1f)
-                                    win.attributes = lp
-                                }
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Rounded.VolumeUp,
-                            contentDescription = null,
-                            tint = Color(0xFF67E8F9),
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Slider(
-                            value = volumeLevel,
-                            onValueChange = { v ->
-                                volumeLevel = v
-                                val targetVol = (v * maxVol).toInt().coerceIn(0, maxVol)
-                                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    if (useExoPlayer) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Speed,
-                                contentDescription = null,
-                                tint = Color(0xFF93C5FD),
-                                modifier = Modifier.size(18.dp)
+                        Column(modifier = Modifier.weight(1f).padding(end = 6.dp)) {
+                            Text(
+                                text = session.title,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { spd ->
-                                val active = playbackSpeed == spd
+                            Text(
+                                text = "${currentServer.name} • In-App Stream",
+                                color = Color(0xFF67E8F9),
+                                fontSize = 11.sp
+                            )
+                        }
+
+                        IconButton(onClick = { showControlsPanel = !showControlsPanel }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Brightness6,
+                                contentDescription = "Controls",
+                                tint = if (showControlsPanel) Color(0xFF67E8F9) else Color.White
+                            )
+                        }
+
+                        IconButton(onClick = { toggleOrientation() }) {
+                            Icon(
+                                imageVector = Icons.Rounded.ScreenRotation,
+                                contentDescription = "Rotate",
+                                tint = Color.White
+                            )
+                        }
+
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Close",
+                                tint = Color.White
+                            )
+                        }
+                    }
+
+                    // Server Switcher Bar
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xE60A0F1E))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(session.servers.indices.toList()) { idx ->
+                            val srv = session.servers[idx]
+                            val active = idx == selectedServerIdx
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (active) Color(0x3322D3EE) else Color.White.copy(alpha = 0.08f))
+                                    .border(
+                                        1.dp,
+                                        if (active) Color(0x9922D3EE) else Color.White.copy(alpha = 0.16f),
+                                        RoundedCornerShape(50)
+                                    )
+                                    .clickable { selectedServerIdx = idx }
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
                                 Text(
-                                    text = "${spd}x",
-                                    color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.75f),
-                                    fontSize = 12.sp,
-                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (active) Color(0x3322D3EE) else Color.Transparent)
-                                        .clickable { playbackSpeed = spd }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    text = srv.name,
+                                    color = if (active) Color(0xFF67E8F9) else Color.White.copy(alpha = 0.85f),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    // Brightness & Volume Sliders
+                    if (showControlsPanel) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xE611182C))
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Brightness6,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFDE68A),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Slider(
+                                    value = brightnessLevel,
+                                    onValueChange = { v ->
+                                        brightnessLevel = v
+                                        activity?.window?.let { win ->
+                                            val lp = win.attributes
+                                            lp.screenBrightness = v.coerceIn(0.05f, 1f)
+                                            win.attributes = lp
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.VolumeUp,
+                                    contentDescription = null,
+                                    tint = Color(0xFF67E8F9),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Slider(
+                                    value = volumeLevel,
+                                    onValueChange = { v ->
+                                        volumeLevel = v
+                                        val targetVol = (v * maxVol).toInt().coerceIn(0, maxVol)
+                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+                                    },
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
                         }
                     }
                 }
-            }
 
-            // Video Player Area
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(Color.Black)
-            ) {
-                if (useExoPlayer && exoPlayer != null) {
-                    AndroidView(
-                        factory = { ctx ->
-                            PlayerView(ctx).apply {
-                                player = exoPlayer
-                                useController = true
-                                controllerShowTimeoutMs = 3500
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
+                // Fullscreen Video Area
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color.Black)
+                ) {
                     key(currentServer.url) {
                         AndroidView(
                             factory = { ctx ->
@@ -1207,7 +1150,12 @@ fun ProAnimePlayerDialog(
                                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                                     )
+                                    android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                                    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                                     settings.javaScriptEnabled = true
+                                    settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
+                                    settings.databaseEnabled = true
                                     settings.domStorageEnabled = true
                                     settings.setSupportMultipleWindows(false)
                                     settings.javaScriptCanOpenWindowsAutomatically = false
@@ -1255,6 +1203,50 @@ fun ProAnimePlayerDialog(
                             },
                             modifier = Modifier.fillMaxSize()
                         )
+                    }
+                }
+            }
+
+            // Floating Toggle Button when in Landscape Fullscreen
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0x88070913))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))
+                            .clickable { showTopUi = !showTopUi }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = if (showTopUi) "Hide Bar" else "Menu",
+                            color = Color(0xFF67E8F9),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    if (!showTopUi) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0x88070913))
+                                .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))
+                                .clickable { toggleOrientation() }
+                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Text(
+                                text = "Exit Full",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
